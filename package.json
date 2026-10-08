@@ -1,0 +1,26 @@
+{
+  "name": "orchestrator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@cerebras/cerebras_cloud_sdk": "^1.91.0",
+    "@google/genai": "^2.22.0",
+    "@google/generative-ai": "^0.24.1",
+    "@mistralai/mistralai": "^2.6.4",
+    "chokidar": "^3.6.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "groq-sdk": "^1.6.0",
+    "openai": "^7.10.0",
+    "pg": "^8.23.1",
+    "playwright": "^1.63.0",
+    "undici": "^7.29.1"
+  }
+}

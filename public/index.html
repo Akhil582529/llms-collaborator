@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>llms-collaborator Orchestrator</title>
+
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 1100px;
+    margin: 40px auto;
+    padding: 0 20px;
+    background: #0f1115;
+    color: #e6e6e6;
+  }
+
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+
+  p.subtitle { color: #888; margin-top: 0; margin-bottom: 24px; }
+
+  textarea, input[type="text"], select {
+    width: 100%;
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: #1a1d24;
+    color: #e6e6e6;
+    font-size: 0.95rem;
+    resize: vertical;
+  }
+
+  button {
+    margin-top: 10px;
+    padding: 10px 18px;
+    border-radius: 8px;
+    border: none;
+    background: #4f7cff;
+    color: white;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+
+  button.secondary { background: #2a2d35; }
+  button.warn { background: #e57373; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button + button { margin-left: 8px; }
+
+  .card {
+    background: #171a21;
+    border: 1px solid #262a33;
+    border-radius: 10px;
+    padding: 18px;
+    margin-top: 18px;
+  }
+
+  .card h2 { font-size: 1rem; margin-top: 0; }
+
+  pre {
+    background: #0c0e12;
+    padding: 12px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 0.82rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .status-line { font-size: 0.85rem; color: #9aa0a6; margin: 4px 0; }
+  .status-done { color: #4caf50; }
+  .status-blocked { color: #e57373; }
+  .status-in_progress { color: #ffb74d; }
+  .status-pending { color: #9aa0a6; }
+
+  .links a {
+    display: inline-block;
+    margin-right: 14px;
+    color: #4f7cff;
+    text-decoration: none;
+  }
+
+  .hidden { display: none; }
+
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+  }
+
+  .stack-field label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.8rem;
+    color: #b7bdc8;
+    font-weight: 600;
+  }
+
+  .stack-field select { padding: 10px; }
+
+  .stack-help {
+    color: #9299a5;
+    font-size: 0.78rem;
+    margin: 6px 0 0;
+    min-height: 2.4em;
+  }
+
+  /* Reference images */
+
+  .ref-drop {
+    margin-top: 10px;
+    padding: 14px;
+    border: 1px dashed #3a3f4b;
+    border-radius: 8px;
+    color: #9aa0a6;
+    font-size: 0.85rem;
+    text-align: center;
+    cursor: pointer;
+  }
+
+  .ref-drop.dragover { border-color: #4f7cff; color: #e6e6e6; }
+  .ref-thumbs { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+
+  .ref-thumb {
+    position: relative;
+    width: 90px;
+    height: 90px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #262a33;
+  }
+
+  .ref-thumb img { width: 100%; height: 100%; object-fit: cover; }
+
+  .ref-thumb button {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    margin: 0;
+    padding: 0;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    font-size: 0.7rem;
+    line-height: 20px;
+  }
+
+  /* Agent cards */
+
+  .agent-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .agent-card {
+    background: #0c0e12;
+    border: 1px solid #262a33;
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .agent-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #262a33;
+  }
+
+  .agent-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #0f1115;
+    flex-shrink: 0;
+  }
+
+  .agent-name { font-weight: 700; font-size: 0.88rem; }
+  .agent-model { font-size: 0.7rem; color: #7f8793; margin-top: 2px; }
+  .agent-heading { flex: 1; min-width: 0; }
+  .agent-summary { font-size: 0.78rem; color: #8b93a0; font-weight: 700; }
+
+  .agent-progress {
+    height: 5px;
+    background: #1a1d24;
+    border-radius: 5px;
+    overflow: hidden;
+    margin: 10px 0 5px;
+  }
+
+  .agent-progress-bar {
+    height: 100%;
+    background: #4f7cff;
+    border-radius: 5px;
+    transition: width 0.3s ease;
+  }
+
+  .agent-progress-label { font-size: 0.7rem; color: #737b87; margin-bottom: 8px; }
+  .agent-tasks { margin-top: 5px; }
+
+  .agent-task { padding: 10px 0; border-bottom: 1px solid #1a1d24; }
+  .agent-task:last-child { border-bottom: none; }
+
+  .task-main { display: flex; align-items: flex-start; gap: 8px; }
+  .task-icon { width: 17px; flex-shrink: 0; font-weight: 700; color: #707783; }
+  .task-done .task-icon { color: #4caf50; }
+  .task-in_progress .task-icon { color: #ffb74d; }
+  .task-blocked .task-icon, .task-failed .task-icon { color: #e57373; }
+  .task-pending .task-icon { color: #666d78; }
+
+  .task-done .agent-task-desc { color: #8d969f; }
+  .task-in_progress .agent-task-desc { color: #f0f1f3; }
+  .task-blocked .agent-task-desc, .task-failed .agent-task-desc { color: #f0a0a0; }
+
+  .agent-task-desc { margin-bottom: 5px; color: #cfd2d6; }
+
+  .task-meta { margin-left: 25px; margin-top: 5px; }
+  .attempt-count { font-size: 0.65rem; color: #666d78; margin-left: 6px; }
+
+  .task-error {
+    margin: 8px 0 5px 25px;
+    padding: 8px;
+    border-radius: 6px;
+    background: rgba(229, 115, 115, 0.08);
+    border: 1px solid rgba(229, 115, 115, 0.2);
+    color: #e57373;
+    font-size: 0.72rem;
+    line-height: 1.4;
+  }
+
+  .retry-task-btn {
+    margin: 7px 0 0 25px;
+    padding: 6px 10px;
+    font-size: 0.72rem;
+    background: #7b3f3f;
+  }
+
+  .status-pill {
+    font-size: 0.7rem;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-weight: 600;
+    display: inline-block;
+    background: #1a1d24;
+  }
+
+  .status-pill.status-pending { color: #9aa0a6; }
+  .status-pill.status-in_progress { color: #ffb74d; }
+  .status-pill.status-done { color: #4caf50; }
+  .status-pill.status-blocked, .status-pill.status-failed { color: #e57373; }
+
+  /* Contributions */
+
+  .contrib-row {
+    display: grid;
+    grid-template-columns: 170px 1fr 60px;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    font-size: 0.82rem;
+  }
+
+  .contrib-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .contrib-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .contrib-bar-track { height: 10px; background: #1a1d24; border-radius: 6px; overflow: hidden; }
+  .contrib-bar-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }
+  .contrib-pct { text-align: right; color: #b7bdc8; font-weight: 600; font-size: 0.8rem; }
+  .contrib-sub { font-size: 0.68rem; color: #707783; }
+
+  /* Live activity */
+
+  .activity-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .live-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.72rem;
+    color: #777f8b;
+  }
+
+  .live-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; }
+  .live-dot.connected { background: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.6); }
+  .live-dot.disconnected { background: #e57373; }
+
+  .activity-feed {
+    margin-top: 12px;
+    background: #0c0e12;
+    border: 1px solid #262a33;
+    border-radius: 8px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+
+  .activity-empty { padding: 18px; color: #707783; font-size: 0.82rem; text-align: center; }
+
+  .activity-entry {
+    display: grid;
+    grid-template-columns: 72px 110px 1fr;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid #1a1d24;
+    font-size: 0.78rem;
+  }
+
+  .activity-entry:last-child { border-bottom: none; }
+  .activity-time { color: #606874; font-family: monospace; font-size: 0.7rem; }
+  .activity-agent { color: #9da5b2; font-weight: 600; }
+  .activity-message { color: #d0d4da; word-break: break-word; }
+  .activity-message.success { color: #73d279; }
+  .activity-message.error { color: #e57373; }
+  .activity-message.warning { color: #ffb74d; }
+
+  .activity-type {
+    display: inline-block;
+    font-size: 0.65rem;
+    margin-left: 6px;
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: #1a1d24;
+    color: #747c88;
+  }
+
+  @media (max-width: 700px) {
+    .activity-entry { grid-template-columns: 60px 90px 1fr; gap: 6px; font-size: 0.72rem; }
+    .contrib-row { grid-template-columns: 110px 1fr 50px; }
+  }
+</style>
+</head>
+
+<body>
+
+<h1>llms-collaborator</h1>
+
+<p class="subtitle">
+  Describe the project, choose the technology stack, then the orchestrator builds it to that specification.
+</p>
+
+<!-- NEW PROJECT -->
+
+<div class="card">
+
+  <h2>New project</h2>
+
+  <textarea
+    id="requirementInput"
+    rows="3"
+    placeholder="e.g. a todo list app with login"
+  ></textarea>
+
+  <div id="refDrop" class="ref-drop">
+    Reference images (optional): click, drag &amp; drop, or paste (up to 3)
+  </div>
+  <input type="file" id="refInput" accept="image/png,image/jpeg,image/webp" multiple hidden />
+  <div id="refThumbs" class="ref-thumbs"></div>
+
+  <div id="stackConfigurator" class="hidden">
+
+    <p class="status-line" style="margin:14px 0 0;">
+      Step 2 of 2 — choose the stack the agents must use.
+    </p>
+
+    <div id="stackFields" class="stack-grid"></div>
+
+  </div>
+
+  <div>
+    <button id="buildBtn">Choose tech stack</button>
+  </div>
+
+</div>
+
+
+<!-- PROGRESS -->
+
+<div id="progressCard" class="card hidden">
+
+  <div class="activity-header">
+
+    <h2 style="margin-bottom:0;">Agent Progress</h2>
+
+    <div class="live-indicator">
+      <span id="liveDot" class="live-dot"></span>
+      <span id="liveStatus">Connecting…</span>
+    </div>
+
+  </div>
+
+  <div class="status-line" style="margin-top:6px;" id="currentActivity">
+    Waiting for agents…
+  </div>
+
+  <div class="agent-cards" id="agentCards"></div>
+
+  <div id="overallStatus" class="status-line" style="margin-top:10px;"></div>
+
+</div>
+
+
+<!-- CONTRIBUTIONS -->
+
+<div id="contributionsCard" class="card hidden">
+
+  <h2>Agent contributions</h2>
+
+  <p class="status-line" style="margin-top:0;">
+    Share of the project each agent has actually written so far (by lines added), with tokens used.
+  </p>
+
+  <div id="contributionsBody"></div>
+
+</div>
+
+
+<!-- LIVE ACTIVITY -->
+
+<div id="activityCard" class="card hidden">
+
+  <div class="activity-header">
+
+    <h2 style="margin-bottom:0;">Live activity</h2>
+
+    <button id="clearActivityBtn" class="secondary" style="margin-top:0;">
+      Clear
+    </button>
+
+  </div>
+
+  <div id="activityFeed" class="activity-feed">
+    <div class="activity-empty">Waiting for agent activity…</div>
+  </div>
+
+</div>
+
+
+<button id="retryBtn" class="warn hidden">
+  Retry blocked subtasks
+</button>
+
+
+<!-- RUNTIME -->
+
+<div id="runtimeCard" class="card hidden">
+  <h2>🟢 Project is live</h2>
+  <p class="status-line" style="margin-top:0;">
+    Your generated app is running. Open it in a new tab; this dashboard stays here.
+  </p>
+  <div class="links">
+    <a id="frontendLink" href="#" target="_blank" rel="noopener">Frontend</a>
+    <a id="backendLink" href="#" target="_blank" rel="noopener">Backend API</a>
+  </div>
+</div>
+
+
+<!-- CHANGE REQUEST -->
+
+<div id="changeCard" class="card hidden">
+
+  <h2>Request a change</h2>
+
+  <input
+    type="text"
+    id="changeInput"
+    placeholder="e.g. add a dark mode toggle"
+  />
+
+  <button id="changeBtn">Apply change</button>
+
+  <div id="changeStatus" class="status-line"></div>
+
+</div>
+
+
+<script>
+
+  /* ============================================================
+     DOM
+  ============================================================ */
+
+  const requirementInput = document.getElementById('requirementInput');
+  const buildBtn = document.getElementById('buildBtn');
+  const stackConfigurator = document.getElementById('stackConfigurator');
+  const stackFields = document.getElementById('stackFields');
+  const progressCard = document.getElementById('progressCard');
+  const agentCards = document.getElementById('agentCards');
+  const overallStatus = document.getElementById('overallStatus');
+  const retryBtn = document.getElementById('retryBtn');
+  const runtimeCard = document.getElementById('runtimeCard');
+  const backendLink = document.getElementById('backendLink');
+  const frontendLink = document.getElementById('frontendLink');
+  const changeCard = document.getElementById('changeCard');
+  const changeInput = document.getElementById('changeInput');
+  const changeBtn = document.getElementById('changeBtn');
+  const changeStatus = document.getElementById('changeStatus');
+  const activityCard = document.getElementById('activityCard');
+  const activityFeed = document.getElementById('activityFeed');
+  const currentActivity = document.getElementById('currentActivity');
+  const liveDot = document.getElementById('liveDot');
+  const liveStatus = document.getElementById('liveStatus');
+  const clearActivityBtn = document.getElementById('clearActivityBtn');
+  const contributionsCard = document.getElementById('contributionsCard');
+  const contributionsBody = document.getElementById('contributionsBody');
+  const refDrop = document.getElementById('refDrop');
+  const refInput = document.getElementById('refInput');
+  const refThumbs = document.getElementById('refThumbs');
+
+
+  /* ============================================================
+     STATE
+  ============================================================ */
+
+  let pollTimer = null;
+  let stackOptionsReady = false;
+  let currentTaskId = null;
+  let activitySource = null;
+
+  const MAX_ACTIVITY_ENTRIES = 200;
+  const MAX_REF_IMAGES = 3; // Groq's vision model accepts 3 images per request
+  let referenceImages = []; // resized JPEG data URLs
+
+  // Palette cycled across however many agents are configured.
+  const AGENT_COLORS = [
+    '#4f7cff', '#4caf50', '#ffb74d', '#ba68c8',
+    '#4dd0e1', '#e57373', '#aed581', '#f06292',
+  ];
+
+  // Populated from GET /api/agents on load: { [agentId]: { displayName, domains, color } }
+  let agentMeta = {};
+  let colorCursor = 0;
+
+  function colorFor(agentId) {
+    if (!agentMeta[agentId]) {
+      agentMeta[agentId] = {
+        displayName: agentId,
+        domains: [],
+        color: AGENT_COLORS[colorCursor % AGENT_COLORS.length],
+      };
+      colorCursor += 1;
+    }
+
+    return agentMeta[agentId].color;
+  }
+
+  function displayNameFor(agentId, fallback) {
+    if (agentMeta[agentId]) {
+      return agentMeta[agentId].displayName;
+    }
+
+    return fallback || agentId;
+  }
+
+
+  /* ============================================================
+     HELPERS
+  ============================================================ */
+
+  function escapeHtml(value) {
+    if (value === undefined || value === null) {
+      return '';
+    }
+
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function setButtonsDisabled(disabled) {
+    buildBtn.disabled = disabled;
+  }
+
+  function selectedTechStack() {
+    return {
+      frontend: document.getElementById('stack-frontend').value,
+      backend: document.getElementById('stack-backend').value,
+      database: document.getElementById('stack-database').value,
+    };
+  }
+
+
+  /* ============================================================
+     REFERENCE IMAGES
+  ============================================================ */
+
+  async function fileToDataUrl(file, maxDim = 1280) {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff'; // transparent PNGs would otherwise turn black in JPEG
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+    return canvas.toDataURL('image/jpeg', 0.85);
+  }
+
+  async function addReferenceFiles(files) {
+    const valid = [...files].filter((f) => /^image\/(png|jpe?g|webp)$/.test(f.type));
+
+    for (const file of valid) {
+      if (referenceImages.length >= MAX_REF_IMAGES) {
+        alert(`Max ${MAX_REF_IMAGES} reference images.`);
+        break;
+      }
+
+      try {
+        referenceImages.push(await fileToDataUrl(file));
+      } catch {
+        alert(`Couldn't read ${file.name}`);
+      }
+    }
+
+    renderReferenceThumbs();
+  }
+
+  function renderReferenceThumbs() {
+    refThumbs.innerHTML = '';
+
+    referenceImages.forEach((src, i) => {
+      const box = document.createElement('div');
+      box.className = 'ref-thumb';
+
+      const img = document.createElement('img');
+      img.src = src;
+
+      const remove = document.createElement('button');
+      remove.textContent = '✕';
+      remove.title = 'Remove';
+      remove.addEventListener('click', () => {
+        referenceImages.splice(i, 1);
+        renderReferenceThumbs();
+      });
+
+      box.append(img, remove);
+      refThumbs.appendChild(box);
+    });
+  }
+
+  refDrop.addEventListener('click', () => refInput.click());
+
+  refInput.addEventListener('change', async () => {
+    await addReferenceFiles(refInput.files);
+    refInput.value = '';
+  });
+
+  ['dragenter', 'dragover'].forEach((ev) =>
+    refDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      refDrop.classList.add('dragover');
+    })
+  );
+
+  ['dragleave', 'drop'].forEach((ev) =>
+    refDrop.addEventListener(ev, (e) => {
+      e.preventDefault();
+      refDrop.classList.remove('dragover');
+    })
+  );
+
+  refDrop.addEventListener('drop', (e) => addReferenceFiles(e.dataTransfer.files));
+
+  document.addEventListener('paste', (e) => {
+    if (e.clipboardData?.files?.length) addReferenceFiles(e.clipboardData.files);
+  });
+
+
+  /* ============================================================
+     AGENT REGISTRY (fetched once — powers labels/colors everywhere)
+  ============================================================ */
+
+  async function loadAgentRegistry() {
+    try {
+      const res = await fetch('/api/agents');
+      const list = await res.json();
+
+      if (!Array.isArray(list)) return;
+
+      list.forEach((agent, index) => {
+        agentMeta[agent.id] = {
+          displayName: agent.displayName || agent.id,
+          domains: agent.domains || [],
+          color: AGENT_COLORS[index % AGENT_COLORS.length],
+        };
+      });
+
+      colorCursor = list.length;
+    } catch (err) {
+      console.error('Failed to load agent registry:', err);
+    }
+  }
+
+
+  /* ============================================================
+     STACK OPTIONS
+  ============================================================ */
+
+  function renderStackOptions(data) {
+    stackFields.innerHTML = '';
+
+    ['frontend', 'backend', 'database'].forEach((category) => {
+      const field = document.createElement('div');
+      field.className = 'stack-field';
+
+      const label = document.createElement('label');
+      label.htmlFor = `stack-${category}`;
+      label.textContent =
+        category === 'frontend' ? 'Frontend' :
+        category === 'backend' ? 'Backend' : 'Database';
+
+      const select = document.createElement('select');
+      select.id = `stack-${category}`;
+
+      data.options[category].forEach((option) => {
+        const item = document.createElement('option');
+        item.value = option.id;
+        item.textContent = option.label;
+        item.selected = option.id === data.recommended[category];
+        select.appendChild(item);
+      });
+
+      const help = document.createElement('p');
+      help.className = 'stack-help';
+
+      function updateHelp() {
+        const selected = data.options[category].find(
+          (option) => option.id === select.value
+        );
+        help.textContent = selected ? selected.description : '';
+      }
+
+      select.addEventListener('change', updateHelp);
+      updateHelp();
+
+      field.append(label, select, help);
+      stackFields.appendChild(field);
+    });
+
+    stackConfigurator.classList.remove('hidden');
+    stackOptionsReady = true;
+    buildBtn.textContent = 'Build project';
+  }
+
+  async function askForTechStack(requirement) {
+    setButtonsDisabled(true);
+
+    try {
+      const res = await fetch('/api/stack-options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requirement }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || `Server responded ${res.status}`);
+      }
+
+      renderStackOptions(data);
+    } finally {
+      setButtonsDisabled(false);
+    }
+  }
+
+
+  /* ============================================================
+     LIVE SSE CONNECTION
+  ============================================================ */
+
+  function connectActivityStream() {
+    if (activitySource) {
+      activitySource.close();
+    }
+
+    activitySource = new EventSource('/api/activity/stream');
+
+    activitySource.onopen = () => {
+      liveDot.classList.add('connected');
+      liveDot.classList.remove('disconnected');
+      liveStatus.textContent = 'Live';
+    };
+
+    activitySource.onerror = () => {
+      liveDot.classList.remove('connected');
+      liveDot.classList.add('disconnected');
+      liveStatus.textContent = 'Reconnecting…';
+    };
+
+    activitySource.onmessage = (event) => {
+      try {
+        const activity = JSON.parse(event.data);
+        renderActivity(activity);
+      } catch (err) {
+        console.error('Invalid activity event:', err);
+      }
+    };
+  }
+
+
+  /* ============================================================
+     ACTIVITY FEED
+  ============================================================ */
+
+  function activityAgentName(activity) {
+    const agent = activity.agent || activity.source || 'system';
+    return displayNameFor(agent, agent);
+  }
+
+  function activityMessage(activity) {
+    if (activity.message) return activity.message;
+    if (activity.event) return activity.event;
+    if (activity.action) return activity.action;
+    if (activity.file) return `Modified ${activity.file}`;
+    return 'Activity received';
+  }
+
+  function activityClass(activity) {
+    const type = String(activity.type || activity.eventType || '').toLowerCase();
+
+    if (type.includes('error') || type.includes('fail')) return 'error';
+    if (type.includes('done') || type.includes('success') || type.includes('pass')) return 'success';
+    if (type.includes('warning') || type.includes('blocked')) return 'warning';
+    return '';
+  }
+
+  function formatTime(timestamp) {
+    if (!timestamp) return '';
+
+    try {
+      return new Date(timestamp).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  }
+
+  function renderActivity(activity) {
+    activityCard.classList.remove('hidden');
+
+    const empty = activityFeed.querySelector('.activity-empty');
+    if (empty) empty.remove();
+
+    const row = document.createElement('div');
+    row.className = 'activity-entry';
+
+    const type = activity.type || activity.eventType || 'event';
+
+    row.innerHTML = `
+      <div class="activity-time">${escapeHtml(formatTime(activity.timestamp))}</div>
+      <div class="activity-agent">${escapeHtml(activityAgentName(activity))}</div>
+      <div class="activity-message ${activityClass(activity)}">
+        ${escapeHtml(activityMessage(activity))}
+        <span class="activity-type">${escapeHtml(type)}</span>
+      </div>
+    `;
+
+    activityFeed.appendChild(row);
+
+    while (activityFeed.children.length > MAX_ACTIVITY_ENTRIES) {
+      activityFeed.removeChild(activityFeed.firstElementChild);
+    }
+
+    activityFeed.scrollTop = activityFeed.scrollHeight;
+    currentActivity.textContent = activityMessage(activity);
+  }
+
+  clearActivityBtn.addEventListener('click', () => {
+    activityFeed.innerHTML = `
+      <div class="activity-empty">Waiting for agent activity…</div>
+    `;
+    currentActivity.textContent = 'Waiting for agents…';
+  });
+
+
+  /* ============================================================
+     RETRY (single subtask)
+     The request stays open until the whole pipeline finishes, so
+     polling must start BEFORE it, or the dashboard looks frozen.
+  ============================================================ */
+
+  async function retrySingleSubtask(taskId, subtaskId) {
+    try {
+      currentActivity.textContent = 'Retrying subtask…';
+      startPolling(taskId);
+
+      const res = await fetch(
+        `/api/tasks/${taskId}/subtasks/${subtaskId}/retry`,
+        { method: 'POST' }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || `Server responded ${res.status}`);
+      }
+
+      renderTask(data);
+    } catch (err) {
+      alert('Retry failed: ' + err.message);
+    }
+  }
+
+
+  /* ============================================================
+     TASK RENDERING
+  ============================================================ */
+
+  // A run is over when no subtask is pending/in progress AND, if every
+  // subtask succeeded, validation has reached a final result. (Stopping
+  // as soon as the app is running used to freeze the dashboard on
+  // "Validation: repairing".)
+  function isTerminal(task) {
+    const finished = task.subtasks.every((s) =>
+      ['done', 'blocked', 'failed'].includes(s.status)
+    );
+
+    if (!finished) return false;
+
+    const allSucceeded = task.subtasks.every((s) => s.status === 'done');
+
+    if (!allSucceeded) return true;
+
+    return ['passed', 'failed'].includes(task.validationStatus);
+  }
+
+  function renderTask(task) {
+    progressCard.classList.remove('hidden');
+    currentTaskId = task.id;
+
+    // Group by the CONCRETE agent that ran (or is running) the subtask
+    // when known, falling back to the domain tag for subtasks not yet
+    // dispatched.
+    const grouped = {};
+
+    task.subtasks.forEach((subtask) => {
+      const key = subtask.assignedAgentId || `${subtask.agent || 'unknown'}-unassigned`;
+
+      if (!grouped[key]) {
+        grouped[key] = {
+          agentId: subtask.assignedAgentId || null,
+          domain: subtask.agent || 'unknown',
+          displayName: subtask.assignedAgentDisplayName ||
+            (subtask.assignedAgentId ? subtask.assignedAgentId :
+              `${subtask.agent || 'unknown'} (unassigned)`),
+          subtasks: [],
+        };
+      }
+
+      grouped[key].subtasks.push(subtask);
+    });
+
+    const cards = Object.values(grouped).map((group) => {
+      const colorKey = group.agentId || group.domain;
+      const dotColor = colorFor(colorKey);
+      const label = group.agentId ? displayNameFor(group.agentId, group.displayName) : group.displayName;
+
+      const completed = group.subtasks.filter((s) => s.status === 'done').length;
+      const blocked = group.subtasks.filter(
+        (s) => s.status === 'blocked' || s.status === 'failed'
+      ).length;
+
+      const progress = group.subtasks.length > 0
+        ? Math.round((completed / group.subtasks.length) * 100)
+        : 0;
+
+      const tasksHtml = group.subtasks.map((subtask) => {
+        const status = subtask.status || 'pending';
+
+        const statusIcon =
+          status === 'done' ? '✓' :
+          status === 'blocked' || status === 'failed' ? '✕' :
+          status === 'in_progress' ? '●' : '○';
+
+        return `
+          <div class="agent-task task-${escapeHtml(status)}">
+            <div class="task-main">
+              <span class="task-icon">${statusIcon}</span>
+              <span class="agent-task-desc">${escapeHtml(subtask.description)}</span>
+            </div>
+
+            <div class="task-meta">
+              <span class="status-pill status-${escapeHtml(status)}">
+                ${escapeHtml(status.replace('_', ' '))}
+              </span>
+              ${subtask.routedComplexity ? `<span class="attempt-count">${escapeHtml(subtask.routedComplexity)}</span>` : ''}
+              ${subtask.attempts ? `<span class="attempt-count">attempt ${subtask.attempts}</span>` : ''}
+            </div>
+
+            ${subtask.lastError ? `<div class="task-error">${escapeHtml(subtask.lastError)}</div>` : ''}
+
+            ${(status === 'blocked' || status === 'failed') ? `
+              <button class="retry-task-btn"
+                data-task-id="${escapeHtml(task.id)}"
+                data-subtask-id="${escapeHtml(subtask.id)}">
+                Retry task
+              </button>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div class="agent-icon" style="background:${dotColor};">
+              ${escapeHtml(label.slice(0, 1).toUpperCase())}
+            </div>
+
+            <div class="agent-heading">
+              <div class="agent-name">${escapeHtml(label)}</div>
+              <div class="agent-model">${escapeHtml(group.domain)}</div>
+            </div>
+
+            <div class="agent-summary">${completed}/${group.subtasks.length}</div>
+          </div>
+
+          <div class="agent-progress">
+            <div class="agent-progress-bar" style="width:${progress}%; background:${dotColor};"></div>
+          </div>
+
+          <div class="agent-progress-label">
+            ${completed} of ${group.subtasks.length} tasks complete
+            ${blocked ? ` · ${blocked} blocked` : ''}
+          </div>
+
+          <div class="agent-tasks">${tasksHtml}</div>
+        </div>
+      `;
+    }).join('');
+
+    agentCards.innerHTML = cards || `
+      <div class="status-line">Waiting for task assignments...</div>
+    `;
+
+    let statusText = `Overall: ${task.status}`;
+
+    if (task.validationStatus) {
+      statusText += ` · Validation: ${task.validationStatus}`;
+    }
+
+    if (task.completenessReport && !task.completenessReport.clean) {
+      statusText += ` — ${task.completenessReport.issues.length} issue(s)`;
+    }
+
+    overallStatus.textContent = statusText;
+
+    document.querySelectorAll('.retry-task-btn').forEach((button) => {
+      button.addEventListener('click', () =>
+        retrySingleSubtask(button.dataset.taskId, button.dataset.subtaskId)
+      );
+    });
+
+    const hasBlocked = task.subtasks.some(
+      (s) => s.status === 'blocked' || s.status === 'failed'
+    );
+
+    retryBtn.classList.toggle('hidden', !hasBlocked);
+    retryBtn.dataset.taskId = task.id;
+
+    if (task.runtime) {
+      runtimeCard.classList.remove('hidden');
+      changeCard.classList.remove('hidden');
+
+      if (task.runtime.backend && task.runtime.backend.url) {
+        backendLink.href = task.runtime.backend.url;
+        backendLink.textContent = `Backend API → ${task.runtime.backend.url}`;
+      }
+
+      if (task.runtime.frontend && task.runtime.frontend.url) {
+        frontendLink.href = task.runtime.frontend.url;
+        frontendLink.textContent = task.runtime.frontend.ready
+          ? `Open project → ${task.runtime.frontend.url}`
+          : `Frontend failed to start — see ${task.runtime.frontend.logPath || 'logs'}`;
+      }
+    }
+  }
+
+
+  /* ============================================================
+     CONTRIBUTIONS
+  ============================================================ */
+
+  async function renderContributions(taskId) {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}/contributions`);
+      const data = await res.json();
+
+      if (!data || !Array.isArray(data.agents) || data.agents.length === 0) {
+        contributionsCard.classList.add('hidden');
+        return;
+      }
+
+      contributionsCard.classList.remove('hidden');
+
+      contributionsBody.innerHTML = data.agents.map((agent) => {
+        const color = colorFor(agent.agentId);
+        const label = displayNameFor(agent.agentId, agent.displayName);
+
+        // Shown only when the contribution summary reports tokens.
+        const tokenText = agent.totalTokens
+          ? ` · ${Number(agent.totalTokens).toLocaleString()} tokens` +
+            (agent.wastedTokens
+              ? ` (${Number(agent.wastedTokens).toLocaleString()} wasted)`
+              : '')
+          : '';
+
+        return `
+          <div class="contrib-row">
+            <div class="contrib-name">
+              <span class="contrib-dot" style="background:${color};"></span>
+              <span>
+                ${escapeHtml(label)}
+                <div class="contrib-sub">
+                  ${agent.subtasksCompleted} subtask(s) · ${agent.filesWritten} file(s)${escapeHtml(tokenText)}
+                </div>
+              </span>
+            </div>
+
+            <div class="contrib-bar-track">
+              <div class="contrib-bar-fill" style="width:${agent.percentage}%; background:${color};"></div>
+            </div>
+
+            <div class="contrib-pct">${agent.percentage}%</div>
+          </div>
+        `;
+      }).join('');
+    } catch (err) {
+      console.error('Failed to load contributions:', err);
+    }
+  }
+
+
+  /* ============================================================
+     TASK POLLING
+  ============================================================ */
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function startPolling(taskId) {
+    stopPolling();
+
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tasks/${taskId}`);
+        const task = await res.json();
+
+        renderTask(task);
+        renderContributions(taskId);
+
+        if (isTerminal(task)) {
+          stopPolling();
+          setButtonsDisabled(false);
+        }
+      } catch (err) {
+        console.error('Polling error:', err);
+      }
+    }, 1000);
+  }
+
+
+  /* ============================================================
+     BUILD
+  ============================================================ */
+
+  buildBtn.addEventListener('click', async () => {
+    const requirement = requirementInput.value.trim();
+
+    if (!requirement) {
+      return alert('Describe what you want built first.');
+    }
+
+    if (!stackOptionsReady) {
+      try {
+        await askForTechStack(requirement);
+      } catch (err) {
+        alert('Failed to load stack options: ' + err.message);
+      }
+      return;
+    }
+
+    setButtonsDisabled(true);
+    progressCard.classList.remove('hidden');
+    activityCard.classList.remove('hidden');
+    runtimeCard.classList.add('hidden');
+    changeCard.classList.add('hidden');
+    contributionsCard.classList.add('hidden');
+
+    agentCards.innerHTML = '<div class="status-line">Submitting requirement…</div>';
+
+    activityFeed.innerHTML = `
+      <div class="activity-empty">Waiting for agents…</div>
+    `;
+
+    currentActivity.textContent = referenceImages.length
+      ? 'Analyzing reference images, then planning…'
+      : 'Submitting project to orchestrator…';
+
+    try {
+      const res = await fetch('/api/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          requirement,
+          techStack: selectedTechStack(),
+          images: referenceImages,
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Server responded ${res.status}`);
+      }
+
+      const task = await res.json();
+
+      renderTask(task);
+      renderContributions(task.id);
+      startPolling(task.id);
+    } catch (err) {
+      agentCards.innerHTML = `
+        <div class="status-line status-blocked">Failed: ${escapeHtml(err.message)}</div>
+      `;
+      setButtonsDisabled(false);
+    }
+  });
+
+
+  /* ============================================================
+     REQUIREMENT CHANGED
+  ============================================================ */
+
+  requirementInput.addEventListener('input', () => {
+    stackOptionsReady = false;
+    stackConfigurator.classList.add('hidden');
+    buildBtn.textContent = 'Choose tech stack';
+  });
+
+
+  /* ============================================================
+     CHANGE REQUEST
+     Like retry, the request stays open until the pipeline finishes,
+     so polling starts first.
+  ============================================================ */
+
+  changeBtn.addEventListener('click', async () => {
+    const change = changeInput.value.trim();
+
+    if (!change) {
+      return alert('Describe the change you want.');
+    }
+
+    if (!currentTaskId) {
+      return alert('Build a project first.');
+    }
+
+    changeBtn.disabled = true;
+    changeStatus.textContent = 'Applying change…';
+    changeStatus.className = 'status-line status-in_progress';
+
+    try {
+      startPolling(currentTaskId);
+
+      const res = await fetch('/api/change-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId: currentTaskId, description: change }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Server responded ${res.status}`);
+      }
+
+      const task = await res.json();
+
+      changeStatus.textContent = 'Change applied.';
+      changeStatus.className = 'status-line status-done';
+
+      renderTask(task);
+      renderContributions(task.id);
+      changeInput.value = '';
+    } catch (err) {
+      changeStatus.textContent = 'Failed: ' + err.message;
+      changeStatus.className = 'status-line status-blocked';
+    } finally {
+      changeBtn.disabled = false;
+    }
+  });
+
+
+  /* ============================================================
+     RETRY (all blocked)
+  ============================================================ */
+
+  retryBtn.addEventListener('click', async () => {
+    const taskId = retryBtn.dataset.taskId;
+
+    retryBtn.disabled = true;
+    retryBtn.textContent = 'Retrying…';
+
+    try {
+      startPolling(taskId);
+
+      const res = await fetch(`/api/tasks/${taskId}/retry-blocked`, { method: 'POST' });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `Server responded ${res.status}`);
+      }
+
+      const task = await res.json();
+
+      renderTask(task);
+      renderContributions(taskId);
+    } catch (err) {
+      alert('Retry failed: ' + err.message);
+    } finally {
+      retryBtn.disabled = false;
+      retryBtn.textContent = 'Retry blocked subtasks';
+    }
+  });
+
+
+  /* ============================================================
+     START
+  ============================================================ */
+
+  loadAgentRegistry();
+  connectActivityStream();
+
+</script>
+
+</body>
+</html>
