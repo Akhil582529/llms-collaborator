@@ -3,20 +3,22 @@
  * config) tagged with:
  *
  *  - domains: which project sides it may work on ('backend' | 'frontend')
- *  - tier:    how much it can be trusted with (1 = small local model or
- *             size-limited hosted model, 2 = capable mid model, 3 =
- *             strongest). Override per agent with <ID>_TIER in .env,
- *             e.g. GROQ_TIER=2.
+ *  - tier:    how much it can be trusted with (1 = small / size-limited
+ *             model, 2 = capable mid model, 3 = strongest). Override per
+ *             agent with <ID>_TIER in .env, e.g. QWEN_TIER=3.
  *
- * pickAgent(domain, { complexity, load }) routes by tier: small subtasks
- * go to tier 1, medium to tier 2, large and repairs to tier 3. WITHIN a
- * tier the agent with the fewest subtasks in the current project is
- * chosen (ties rotate round-robin), so every available model in a tier
- * gets a share of the work. A failed agent is escalated past by the
- * orchestrator (excludeIds) to the next tier up.
+ * pickAgent(domain, { complexity, load }) uses FAIR-SHARE routing: build the
+ * pool of agents capable enough for the subtask's complexity, then pick the
+ * least-contributed one (ties rotate round-robin). A failed agent is
+ * escalated past by the orchestrator (excludeIds).
  *
- * Add a provider by adding an entry here — nothing else in the pipeline
- * needs to change, since genericAgent.js is provider-agnostic.
+ * Models are hosted by default (Llama / Qwen / Mistral via API keys). Local
+ * llama.cpp / Ollama agents only load if you opt in:
+ *   USE_LOCAL_MODELS=true   (llama.cpp servers on 8080 / 8081)
+ *   OLLAMA_MODEL=...        (Ollama)
+ *
+ * Add a provider by adding an addHosted(...) call — nothing else in the
+ * pipeline needs to change, since genericAgent.js is provider-agnostic.
  */
 
 'use strict';
@@ -26,16 +28,15 @@ const { createModelClient } = require('./modelClients');
 const { runGenericAgent } = require('./genericAgent');
 
 /**
- * Local llama.cpp servers are CPU-bound and can take much longer than a
- * hosted API to start streaming. The undici dispatcher timeouts AND the
- * OpenAI SDK's own `timeout` must agree, or the shorter one silently
- * cancels a generation that was about to succeed. Only local clients get
- * this override.
+ * Local servers are CPU-bound and can take much longer than a hosted API to
+ * start streaming. The undici dispatcher timeouts AND the OpenAI SDK's own
+ * `timeout` must agree, or the shorter one silently cancels a generation
+ * that was about to succeed. Only local clients get this override.
  */
 const LOCAL_HEADERS_TIMEOUT_MS = 15 * 60_000;
 
-// Caps one response so a runaway completion doesn't run for 20+ minutes
-// at ~7 tokens/s on CPU.
+// Caps one local response so a runaway completion doesn't run for 20+
+// minutes at ~7 tokens/s on CPU.
 const LOCAL_MAX_TOKENS = 2048;
 
 const localDispatcher = new UndiciAgent({
@@ -53,138 +54,171 @@ function tierFor(id, defaultTier) {
   return [1, 2, 3].includes(fromEnv) ? fromEnv : defaultTier;
 }
 
+/**
+ * Registers a hosted, OpenAI-compatible agent if an API key is set.
+ * `keyEnv` can be one env var name or an array; the first one that is set
+ * is used.
+ */
+function addHosted(registry, {
+  id,
+  displayName,
+  keyEnv,
+  baseURL,
+  model,
+  defaultTier,
+  supportsNativeTools = true,
+}) {
+  const keyNames = [].concat(keyEnv);
+  const activeKeyName = keyNames.find((name) => process.env[name]);
+
+  if (!activeKeyName) {
+    console.log(`[agentRegistry] ${keyNames.join(' / ')} not set — ${displayName} disabled.`);
+    return;
+  }
+
+  registry.push({
+    id,
+    displayName,
+    domains: ['backend', 'frontend'],
+    tier: tierFor(id, defaultTier),
+    client: createModelClient({
+      baseURL,
+      apiKey: process.env[activeKeyName],
+      model,
+      supportsNativeTools,
+    }),
+  });
+}
+
 function buildRegistry() {
   const registry = [];
 
-  registry.push({
-    id: 'qwen-local',
-    displayName: 'Qwen2.5-Coder (local)',
-    domains: ['backend', 'frontend'],
-    tier: tierFor('qwen-local', 1),
-    client: createModelClient({
-      baseURL: process.env.QWEN_BASE_URL || 'http://127.0.0.1:8081/v1',
-      apiKey: 'local-qwen',
-      model: process.env.QWEN_MODEL || 'Qwen2.5-Coder-7B-Instruct',
-      supportsNativeTools: false,
-      fetch: localFetch,
-      timeoutMs: LOCAL_HEADERS_TIMEOUT_MS,
-      maxTokens: LOCAL_MAX_TOKENS,
-    }),
+  /* ---------------- Hosted: Mistral ---------------- */
+  addHosted(registry, {
+    id: 'mistral',
+    displayName: 'Mistral',
+    keyEnv: 'MISTRAL_API_KEY',
+    baseURL: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+    model: process.env.MISTRAL_MODEL || 'codestral-latest',
+    defaultTier: 3,
   });
 
-  registry.push({
-    id: 'llama-local',
-    displayName: 'Llama-3.1 (local)',
-    domains: ['backend', 'frontend'],
-    tier: tierFor('llama-local', 1),
-    client: createModelClient({
-      baseURL: process.env.LLAMA_BASE_URL || 'http://127.0.0.1:8080/v1',
-      apiKey: 'local-llama',
-      model: process.env.LLAMA_MODEL || 'Llama-3.1-8B-Instruct',
-      supportsNativeTools: false,
-      fetch: localFetch,
-      timeoutMs: LOCAL_HEADERS_TIMEOUT_MS,
-      maxTokens: LOCAL_MAX_TOKENS,
-    }),
+  /* ---------------- Hosted: Llama ---------------- */
+  // Any OpenAI-compatible host:
+  //   LLAMA_API_BASE_URL, LLAMA_API_KEY (or OPENROUTER_API_KEY), LLAMA_API_MODEL
+  // Defaults to OpenRouter's paid Llama 3.3 70B slug (the :free variant was
+  // removed).
+  addHosted(registry, {
+    id: 'llama',
+    displayName: 'Llama 3.3 70B',
+    keyEnv: ['LLAMA_API_KEY', 'OPENROUTER_API_KEY'],
+    baseURL: process.env.LLAMA_API_BASE_URL || 'https://openrouter.ai/api/v1',
+    model: process.env.LLAMA_API_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+    defaultTier: 2,
   });
 
-  if (process.env.GEMINI_API_KEY) {
-    registry.push({
-      id: 'gemini',
-      displayName: 'Gemini',
-      domains: ['backend', 'frontend'],
-      tier: tierFor('gemini', 3),
-      client: createModelClient({
-        baseURL:
-          process.env.GEMINI_BASE_URL ||
-          'https://generativelanguage.googleapis.com/v1beta/openai/',
-        apiKey: process.env.GEMINI_API_KEY,
-        model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
-        supportsNativeTools: true,
-      }),
-    });
-  } else {
-    console.log('[agentRegistry] GEMINI_API_KEY not set — Gemini disabled.');
-  }
+  /* ---------------- Hosted: Qwen ---------------- */
+  // Any OpenAI-compatible host:
+  //   QWEN_API_BASE_URL, QWEN_API_KEY, QWEN_API_MODEL
+  // Falls back to Groq if only GROQ_API_KEY is set, but Groq's free tier caps
+  // Qwen at ~7000 input tokens/min, which is too small for agent loops.
+  // OpenRouter (or any paid host) is recommended.
+  addHosted(registry, {
+    id: 'qwen',
+    displayName: 'Qwen',
+    keyEnv: ['QWEN_API_KEY', 'GROQ_API_KEY'],
+    baseURL: process.env.QWEN_API_BASE_URL || 'https://api.groq.com/openai/v1',
+    model: process.env.QWEN_API_MODEL || 'qwen/qwen3.8-27b',
+    defaultTier: 2,
+  });
 
-  if (process.env.MISTRAL_API_KEY) {
-    registry.push({
-      id: 'mistral',
-      displayName: 'Mistral',
-      domains: ['backend', 'frontend'],
-      tier: tierFor('mistral', 3),
-      client: createModelClient({
-        baseURL: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
-        apiKey: process.env.MISTRAL_API_KEY,
-        model: process.env.MISTRAL_MODEL || 'codestral-latest',
-        supportsNativeTools: true,
-      }),
-    });
-  } else {
-    console.log('[agentRegistry] MISTRAL_API_KEY not set — Mistral disabled.');
-  }
+  /* ---------------- Hosted: Qwen (via DashScope) ---------------- */
+  // Alibaba Cloud's Qwen API. Set DASHSCOPE_BASE_URL for the
+  // mainland-China endpoint.
+  addHosted(registry, {
+    id: 'dashscope',
+    displayName: 'DashScope (Qwen)',
+    keyEnv: 'DASHSCOPE_API_KEY',
+    baseURL:
+      process.env.DASHSCOPE_BASE_URL ||
+      'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    model: process.env.DASHSCOPE_MODEL || 'qwen-plus',
+    defaultTier: 2,
+  });
 
-  if (process.env.DEEPSEEK_API_KEY) {
-    registry.push({
-      id: 'deepseek',
-      displayName: 'DeepSeek',
-      domains: ['backend', 'frontend'],
-      tier: tierFor('deepseek', 3),
-      client: createModelClient({
-        baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
-        apiKey: process.env.DEEPSEEK_API_KEY,
-        model: process.env.DEEPSEEK_MODEL || 'deepseek-flash',
-        supportsNativeTools: true,
-      }),
-    });
-  } else {
-    console.log('[agentRegistry] DEEPSEEK_API_KEY not set — DeepSeek disabled.');
-  }
+  /* ---------------- Hosted: gpt-oss (via Groq) ---------------- */
+  // Tier 1 by default: on the free tier it hits payload_too_large as a
+  // conversation grows, so it is only reliable for small, single-file
+  // subtasks. Raise with GROQ_TIER=2 if you are on a paid plan.
+  addHosted(registry, {
+    id: 'groq',
+    displayName: 'Groq (gpt-oss)',
+    keyEnv: 'GROQ_API_KEY',
+    baseURL: process.env.GROQ_EXEC_BASE_URL || 'https://api.groq.com/openai/v1',
+    model: process.env.GROQ_EXEC_MODEL || 'openai/gpt-oss-120b',
+    defaultTier: 1,
+  });
 
-  // Same account as the planner (groqProvider.js), registered as an
-  // execution agent too. Tier 1 by default: on the free tier it hits
-  // payload_too_large as a conversation grows, so it is only reliable
-  // for small, single-file subtasks. Raise with GROQ_TIER=2 if you are
-  // on a paid plan.
-  if (process.env.GROQ_API_KEY) {
-    registry.push({
-      id: 'groq',
-      displayName: 'Groq',
-      domains: ['backend', 'frontend'],
-      tier: tierFor('groq', 1),
-      client: createModelClient({
-        baseURL: process.env.GROQ_EXEC_BASE_URL || 'https://api.groq.com/openai/v1',
-        apiKey: process.env.GROQ_API_KEY,
-        model: process.env.GROQ_EXEC_MODEL || 'openai/gpt-oss-120b',
-        supportsNativeTools: true,
-      }),
-    });
-  } else {
-    console.log('[agentRegistry] GROQ_API_KEY not set — Groq execution agent disabled.');
-  }
+  /* ---------------- Hosted: Gemini ---------------- */
+  addHosted(registry, {
+    id: 'gemini',
+    displayName: 'Gemini',
+    keyEnv: 'GEMINI_API_KEY',
+    baseURL:
+      process.env.GEMINI_BASE_URL ||
+      'https://generativelanguage.googleapis.com/v1beta/openai/',
+    model: process.env.GEMINI_MODEL || 'gemini-flash-latest',
+    defaultTier: 3,
+  });
+
+  /* ---------------- Hosted: DeepSeek ---------------- */
+  addHosted(registry, {
+    id: 'deepseek',
+    displayName: 'DeepSeek',
+    keyEnv: 'DEEPSEEK_API_KEY',
+    baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1',
+    model: process.env.DEEPSEEK_MODEL || 'deepseek-flash',
+    defaultTier: 3,
+  });
 
   // Cerebras removed — this account gets 402 Payment Required on every
-  // request. Re-add if billing is sorted out.
+  // request. Re-add with addHosted() if billing is sorted out.
 
-  // Assumed to mean DashScope (Alibaba Cloud's Qwen API). Set
-  // DASHSCOPE_BASE_URL for the mainland-China endpoint.
-  if (process.env.DASHSCOPE_API_KEY) {
+  /* ---------------- Local (opt-in only) ---------------- */
+  if (process.env.USE_LOCAL_MODELS === 'true') {
     registry.push({
-      id: 'dashscope',
-      displayName: 'DashScope (Qwen)',
+      id: 'qwen-local',
+      displayName: 'Qwen2.5-Coder (local)',
       domains: ['backend', 'frontend'],
-      tier: tierFor('dashscope', 2),
+      tier: tierFor('qwen-local', 1),
       client: createModelClient({
-        baseURL:
-          process.env.DASHSCOPE_BASE_URL ||
-          'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-        apiKey: process.env.DASHSCOPE_API_KEY,
-        model: process.env.DASHSCOPE_MODEL || 'qwen-plus',
-        supportsNativeTools: true,
+        baseURL: process.env.QWEN_BASE_URL || 'http://127.0.0.1:8081/v1',
+        apiKey: 'local-qwen',
+        model: process.env.QWEN_MODEL || 'Qwen2.5-Coder-7B-Instruct',
+        supportsNativeTools: false,
+        fetch: localFetch,
+        timeoutMs: LOCAL_HEADERS_TIMEOUT_MS,
+        maxTokens: LOCAL_MAX_TOKENS,
+      }),
+    });
+
+    registry.push({
+      id: 'llama-local',
+      displayName: 'Llama-3.1 (local)',
+      domains: ['backend', 'frontend'],
+      tier: tierFor('llama-local', 1),
+      client: createModelClient({
+        baseURL: process.env.LLAMA_BASE_URL || 'http://127.0.0.1:8080/v1',
+        apiKey: 'local-llama',
+        model: process.env.LLAMA_MODEL || 'Llama-3.1-8B-Instruct',
+        supportsNativeTools: false,
+        fetch: localFetch,
+        timeoutMs: LOCAL_HEADERS_TIMEOUT_MS,
+        maxTokens: LOCAL_MAX_TOKENS,
       }),
     });
   } else {
-    console.log('[agentRegistry] DASHSCOPE_API_KEY not set — DashScope disabled.');
+    console.log('[agentRegistry] USE_LOCAL_MODELS not "true" — llama.cpp local agents disabled.');
   }
 
   // Gated on explicitly setting OLLAMA_MODEL. Local, so same long-timeout
@@ -229,8 +263,9 @@ function buildRegistry() {
 
   if (registry.length === 0) {
     throw new Error(
-      '[agentRegistry] No agents configured at all. Check your local ' +
-        'llama.cpp servers and/or API keys.'
+      '[agentRegistry] No agents configured at all. Set at least one API ' +
+        'key (MISTRAL_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, ...) or ' +
+        'USE_LOCAL_MODELS=true.'
     );
   }
 
@@ -283,18 +318,14 @@ function cooldownRemainingMs(agentId) {
 /* Picking                                                             */
 /* ------------------------------------------------------------------ */
 
-/* ------------------------------------------------------------------ */
-/* Picking                                                             */
-/* ------------------------------------------------------------------ */
-
 const REQUIRED_TIER = {
   small: 1,
   medium: 2,
   large: 3,
 };
 
-// One cursor per domain. This is only used when multiple agents have
-// exactly the same contribution score.
+// One cursor per domain. Only used when multiple agents have exactly the
+// same contribution score.
 const roundRobinCursors = {
   backend: 0,
   frontend: 0,
@@ -311,8 +342,6 @@ const roundRobinCursors = {
  *   subtasks       = 1 point
  *   files          = 0.5 points each
  *   lines          = 0.01 points each
- *
- * This keeps task count important while still accounting for actual work.
  */
 function contributionScore(agentId, load = {}) {
   const stats = load[agentId];
@@ -333,18 +362,8 @@ function contributionScore(agentId, load = {}) {
 }
 
 /**
- * Pick the least-contributed eligible agent.
- *
- * This is the main fairness mechanism.
- *
- * IMPORTANT:
- * We do NOT first choose a tier and then balance inside that tier.
- *
- * Instead:
- *
- *   1. Determine which agents are capable enough.
- *   2. Among those agents, choose the least-contributed one.
- *   3. Use round-robin only for exact ties.
+ * Pick the least-contributed eligible agent (main fairness mechanism).
+ * Round-robin is used only for exact ties.
  */
 function pickFairAgent(pool, domain, load) {
   if (!pool.length) {
@@ -375,48 +394,22 @@ function pickFairAgent(pool, domain, load) {
 }
 
 /**
- * Returns whether an agent is capable enough for the requested
- * complexity.
- *
- * We still respect capability.
- *
  * small  -> tier 1+
  * medium -> tier 2+
  * large  -> tier 3+
- *
- * However, if there are not enough high-tier agents available, we can
- * degrade one level rather than getting stuck.
  */
 function capableAgents(candidates, requiredTier) {
   return candidates.filter((agent) => agent.tier >= requiredTier);
 }
 
 /**
- * Choose an agent using FAIR-SHARE routing.
- *
- * Old behaviour:
- *
- *   required tier -> find tier -> choose least loaded in that tier
- *
- * New behaviour:
+ * FAIR-SHARE routing:
  *
  *   required capability -> build eligible pool -> choose least
  *   contributed agent
  *
- * Example:
- *
- *   Mistral   tier 3  score 8
- *   Gemini    tier 3  score 2
- *   DeepSeek  tier 3  score 5
- *   Groq      tier 1  score 0
- *
- * Large task:
- *   Gemini wins because it is the least contributed tier-3 agent.
- *
- * Small task:
- *   Groq wins because it is capable and has contributed least.
- *
- * This prevents Mistral from automatically receiving everything.
+ * If no fully capable agent is available, degrade by ONE tier only, then
+ * fall back to anything available.
  */
 function choose(candidates, domain, requiredTier, load) {
   const available = candidates.filter((agent) => isAvailable(agent.id));
@@ -426,43 +419,29 @@ function choose(candidates, domain, requiredTier, load) {
     // available soonest, preferring the required capability.
     const capableCooling = candidates
       .filter((agent) => agent.tier >= requiredTier)
-      .sort(
-        (a, b) =>
-          cooldownRemainingMs(a.id) - cooldownRemainingMs(b.id)
-      );
+      .sort((a, b) => cooldownRemainingMs(a.id) - cooldownRemainingMs(b.id));
 
     if (capableCooling.length > 0) {
       return capableCooling[0];
     }
 
     return [...candidates].sort(
-      (a, b) =>
-        cooldownRemainingMs(a.id) - cooldownRemainingMs(b.id)
+      (a, b) => cooldownRemainingMs(a.id) - cooldownRemainingMs(b.id)
     )[0];
   }
 
-  // ---------------------------------------------------------------
   // 1. Prefer agents that are capable enough.
-  // ---------------------------------------------------------------
-
   const capable = capableAgents(available, requiredTier);
 
   if (capable.length > 0) {
     return pickFairAgent(capable, domain, load);
   }
 
-  // ---------------------------------------------------------------
-  // 2. No fully capable agent is available.
-  //
-  // Degrade by ONE tier only.
-  // ---------------------------------------------------------------
-
+  // 2. No fully capable agent is available — degrade by ONE tier only.
   const degradedTier = requiredTier - 1;
 
   if (degradedTier >= 1) {
-    const degraded = available.filter(
-      (agent) => agent.tier === degradedTier
-    );
+    const degraded = available.filter((agent) => agent.tier === degradedTier);
 
     if (degraded.length > 0) {
       console.warn(
@@ -474,10 +453,7 @@ function choose(candidates, domain, requiredTier, load) {
     }
   }
 
-  // ---------------------------------------------------------------
   // 3. Last resort.
-  // ---------------------------------------------------------------
-
   return pickFairAgent(available, domain, load);
 }
 
@@ -489,24 +465,8 @@ function choose(candidates, domain, requiredTier, load) {
  * @param {object} [options]
  * @param {string[]} [options.excludeIds]
  * @param {'small'|'medium'|'large'} [options.complexity]
- *
- * `load` can now be either:
- *
- * {
- *   mistral: {
- *     subtasks: 2,
- *     files: 7,
- *     lines: 320
- *   }
- * }
- *
- * or the old:
- *
- * {
- *   mistral: 2
- * }
- *
- * The new format is preferred.
+ * @param {object} [options.load] { [agentId]: { subtasks, files, lines } }
+ *   (or the old { [agentId]: number } format)
  */
 function pickAgent(domain, options = {}) {
   const excludeIds = options.excludeIds || [];
@@ -514,29 +474,18 @@ function pickAgent(domain, options = {}) {
   const load = options.load || {};
 
   const candidates = REGISTRY.filter(
-    (agent) =>
-      agent.domains.includes(domain) &&
-      !excludeIds.includes(agent.id)
+    (agent) => agent.domains.includes(domain) && !excludeIds.includes(agent.id)
   );
 
   if (candidates.length === 0) {
     throw new Error(
       `No agent is configured for domain "${domain}"` +
-        (excludeIds.length
-          ? ` excluding [${excludeIds.join(', ')}]`
-          : '') +
-        `. Configured: ${
-          REGISTRY.map((a) => a.id).join(', ') || 'none'
-        }`
+        (excludeIds.length ? ` excluding [${excludeIds.join(', ')}]` : '') +
+        `. Configured: ${REGISTRY.map((a) => a.id).join(', ') || 'none'}`
     );
   }
 
-  const chosen = choose(
-    candidates,
-    domain,
-    requiredTier,
-    load
-  );
+  const chosen = choose(candidates, domain, requiredTier, load);
 
   console.log(
     `[agentRegistry] selected ${chosen.id} for ${domain} ` +
@@ -548,9 +497,7 @@ function pickAgent(domain, options = {}) {
     id: chosen.id,
     displayName: chosen.displayName,
     tier: chosen.tier,
-    coolingDownMs: isAvailable(chosen.id)
-      ? 0
-      : cooldownRemainingMs(chosen.id),
+    coolingDownMs: isAvailable(chosen.id) ? 0 : cooldownRemainingMs(chosen.id),
 
     run(subtaskDescription, apiContract, techStack) {
       return runGenericAgent({

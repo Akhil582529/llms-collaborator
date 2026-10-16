@@ -43,15 +43,17 @@ app.post('/api/suggest-stack', (req, res) => {
   }
 });
 
-// POST /api/tasks  { requirement, techStack, images? }
-// Kicks off the orchestrator: analyzes reference images (if any), plans
-// subtasks, stores the task graph.
+// POST /api/tasks  { requirement, techStack, images?, spec? }
+// Kicks off the orchestrator: analyzes the reference images and/or the
+// uploaded .md spec (if any), plans subtasks, stores the task graph.
+//   spec = { name: "project.md", text: "<markdown contents>" }
 app.post('/api/tasks', async (req, res) => {
   try {
-    const { requirement, techStack, images } = req.body;
+    const { requirement, techStack, images, spec } = req.body;
     const task = await orchestrator.submitRequirement(requirement, {
       techStack,
       images,
+      spec,
     });
     res.status(201).json(task);
   } catch (err) {
@@ -239,4 +241,3 @@ app.listen(PORT, () => {
   console.log(`Orchestrator running on http://localhost:${PORT}`);
   fileWatcher.start();
 });
-

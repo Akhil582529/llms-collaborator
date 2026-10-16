@@ -9,6 +9,7 @@ const taskStore = require('./taskStore');
 const persistence = require('./persistance');
 const referenceStore = require('./referenceStore');
 const { analyzeReferences } = require('./referenceAnalyzer');
+const { analyzeMarkdown } = require('./specAnalyzer');
 const { estimateComplexity } = require('./complexity');
 const { runSmokeTests } = require('./smokeTest');
 const { runBrowserE2E } = require('./browserE2E');
@@ -64,18 +65,12 @@ function normalizeDependsOn(task) {
     const domain = subtask.domain || subtask.agent;
 
     if (domain) {
-      byAgent.set(
-        String(domain).toLowerCase().trim(),
-        subtask
-      );
+      byAgent.set(String(domain).toLowerCase().trim(), subtask);
     }
 
     // Backwards compatibility for older task records.
     if (subtask.agent) {
-      byAgent.set(
-        String(subtask.agent).toLowerCase().trim(),
-        subtask
-      );
+      byAgent.set(String(subtask.agent).toLowerCase().trim(), subtask);
     }
 
     // Also support planner references such as "0", "1", "2".
@@ -134,7 +129,6 @@ function normalizeDependsOn(task) {
   return task;
 }
 
-
 function inferSubtaskDomain(subtask) {
   const explicit = subtask?.domain ?? subtask?.agent;
   const normalized = explicit ? String(explicit).toLowerCase().trim() : '';
@@ -152,45 +146,15 @@ function inferSubtaskDomain(subtask) {
   ).toLowerCase();
 
   const backendScore = [
-    'backend',
-    'api',
-    'endpoint',
-    'server',
-    'database',
-    'postgres',
-    'mongodb',
-    'sql',
-    'express',
-    'node',
-    'route',
-    'authentication',
-    'auth',
-    'jwt',
-    'middleware',
-    'schema',
-    'model',
-    'migration',
+    'backend', 'api', 'endpoint', 'server', 'database', 'postgres',
+    'mongodb', 'sql', 'express', 'node', 'route', 'authentication',
+    'auth', 'jwt', 'middleware', 'schema', 'model', 'migration',
   ].reduce((score, word) => score + (text.includes(word) ? 1 : 0), 0);
 
   const frontendScore = [
-    'frontend',
-    'ui',
-    'ux',
-    'react',
-    'vue',
-    'angular',
-    'vite',
-    'component',
-    'page',
-    'screen',
-    'css',
-    'tailwind',
-    'browser',
-    'form',
-    'dashboard',
-    'navbar',
-    'button',
-    'responsive',
+    'frontend', 'ui', 'ux', 'react', 'vue', 'angular', 'vite',
+    'component', 'page', 'screen', 'css', 'tailwind', 'browser',
+    'form', 'dashboard', 'navbar', 'button', 'responsive',
   ].reduce((score, word) => score + (text.includes(word) ? 1 : 0), 0);
 
   // Project setup/integration tasks are allowed to go to either side;
@@ -213,10 +177,7 @@ function normalizeSubtaskRouting(subtask) {
   // This is a logical domain, NOT the concrete model/provider.
   subtask.agent = domain;
 
-  if (
-    !Array.isArray(subtask.dependsOn) &&
-    Array.isArray(subtask.dependencies)
-  ) {
+  if (!Array.isArray(subtask.dependsOn) && Array.isArray(subtask.dependencies)) {
     subtask.dependsOn = [...subtask.dependencies];
   }
 
@@ -354,9 +315,7 @@ function usageOf(result) {
   const completionTokens = u.completionTokens ?? u.completion_tokens ?? 0;
 
   const totalTokens =
-    u.totalTokens ??
-    u.total_tokens ??
-    promptTokens + completionTokens;
+    u.totalTokens ?? u.total_tokens ?? promptTokens + completionTokens;
 
   return {
     promptTokens,
@@ -380,25 +339,17 @@ function recordAttempt(
 
   try {
     if (typeof contributions.recordAttempt === 'function') {
-      contributions.recordAttempt(
-        task.id,
-        agentChoice.id,
-        agentChoice.displayName,
-        {
-          outcome,
-          promptTokens: extra.promptTokens,
-          completionTokens: extra.completionTokens,
-          totalTokens: extra.totalTokens,
-          estimated: extra.estimated,
-          durationMs,
-        }
-      );
+      contributions.recordAttempt(task.id, agentChoice.id, agentChoice.displayName, {
+        outcome,
+        promptTokens: extra.promptTokens,
+        completionTokens: extra.completionTokens,
+        totalTokens: extra.totalTokens,
+        estimated: extra.estimated,
+        durationMs,
+      });
     }
   } catch (error) {
-    console.warn(
-      '[orchestrator] could not record attempt contribution:',
-      error.message
-    );
+    console.warn('[orchestrator] could not record attempt contribution:', error.message);
   }
 
   try {
@@ -417,46 +368,32 @@ function recordAttempt(
 
     if (pending && typeof pending.catch === 'function') {
       pending.catch((error) =>
-        console.warn(
-          '[orchestrator] could not persist run:',
-          error.message
-        )
+        console.warn('[orchestrator] could not persist run:', error.message)
       );
     }
   } catch (error) {
-    console.warn(
-      '[orchestrator] could not persist run:',
-      error.message
-    );
+    console.warn('[orchestrator] could not persist run:', error.message);
   }
 }
 
 function refineCooldown(error) {
   const message = String(error?.message || '');
 
-  const budget = message.match(
-    /Limit (\d+), Used (\d+), Requested (\d+)/i
-  );
+  const budget = message.match(/Limit (\d+), Used (\d+), Requested (\d+)/i);
 
   if (budget && /tokens per minute|\bTPM\b/i.test(message)) {
     const limit = Number(budget[1]);
     const requested = Number(budget[3]);
 
     if (requested <= limit) {
-      const retry = message.match(
-        /try again in ([\d.]+)\s*(ms|s)\b/i
-      );
+      const retry = message.match(/try again in ([\d.]+)\s*(ms|s)\b/i);
 
       const suggestedMs = retry
-        ? Number(retry[1]) *
-          (retry[2].toLowerCase() === 'ms' ? 1 : 1000)
+        ? Number(retry[1]) * (retry[2].toLowerCase() === 'ms' ? 1 : 1000)
         : 10_000;
 
       return {
-        retryAfterMs: Math.max(
-          5_000,
-          Math.ceil(suggestedMs) + 5_000
-        ),
+        retryAfterMs: Math.max(5_000, Math.ceil(suggestedMs) + 5_000),
         reason: 'rate_limit',
       };
     }
@@ -476,15 +413,9 @@ function persistProject(taskId) {
   }
 
   try {
-    persistence.finalizeProject(
-      task,
-      contributions.getContributionSummary(taskId)
-    );
+    persistence.finalizeProject(task, contributions.getContributionSummary(taskId));
   } catch (error) {
-    console.error(
-      '[orchestrator] could not persist project:',
-      error.message
-    );
+    console.error('[orchestrator] could not persist project:', error.message);
   }
 }
 
@@ -495,19 +426,12 @@ function agentLoad(task, excludeSubtaskId) {
   const load = {};
 
   for (const subtask of task.subtasks || []) {
-    if (
-      subtask.id === excludeSubtaskId ||
-      !subtask.assignedAgentId
-    ) {
+    if (subtask.id === excludeSubtaskId || !subtask.assignedAgentId) {
       continue;
     }
 
-    if (
-      subtask.status === 'done' ||
-      subtask.status === 'in_progress'
-    ) {
-      load[subtask.assignedAgentId] =
-        (load[subtask.assignedAgentId] || 0) + 1;
+    if (subtask.status === 'done' || subtask.status === 'in_progress') {
+      load[subtask.assignedAgentId] = (load[subtask.assignedAgentId] || 0) + 1;
     }
   }
 
@@ -548,23 +472,82 @@ function releaseActiveGeneration(taskId) {
   }
 }
 
+/**
+ * Combines a markdown spec and image analysis into one reference. The
+ * document is the source of truth for scope, features and colors; the image
+ * only adds layout/visual detail.
+ */
+function mergeReferences(specRef, imageRef) {
+  if (specRef && imageRef) {
+    return {
+      source: 'markdown+image',
+      projectName: specRef.projectName,
+      colorLines: specRef.colorLines,
+      stackHint: specRef.stackHint,
+      forPlanner:
+        specRef.forPlanner +
+        '\n\nVISUAL REFERENCE (from an uploaded image; the document above wins on scope and features):\n' +
+        imageRef.forPlanner,
+      forFrontend:
+        specRef.forFrontend +
+        '\n\nVISUAL REFERENCE (from an uploaded image: use it for layout and look. If its colors differ from the COLOR CODES above, use the document hex values):\n' +
+        imageRef.forFrontend,
+      forBackend: specRef.forBackend,
+    };
+  }
+
+  if (specRef) return specRef;
+
+  return imageRef ? { ...imageRef, source: 'image' } : null;
+}
+
+/**
+ * options:
+ *   techStack  { frontend, backend, database }
+ *   images     array of image data URLs (optional)
+ *   spec       { name, text } uploaded .md project document (optional)
+ *
+ * The requirement text is optional when a spec is attached.
+ */
 async function submitRequirement(requirement, options = {}) {
   assertNoActiveGeneration();
 
-  let reference = null;
+  const specText = String(options.spec?.text || '').trim();
+  const hasImages = Array.isArray(options.images) && options.images.length > 0;
 
-  if (
-    Array.isArray(options.images) &&
-    options.images.length > 0
-  ) {
-    reference = await analyzeReferences(
+  if (!String(requirement || '').trim() && !specText) {
+    throw new Error('Describe the project or attach a specification (.md) file.');
+  }
+
+  let specRef = null;
+  let imageRef = null;
+
+  if (specText) {
+    specRef = await analyzeMarkdown(specText, options.spec.name || 'spec.md');
+  }
+
+  if (hasImages) {
+    imageRef = await analyzeReferences(
       options.images,
-      requirement
+      String(requirement || '').trim() ||
+        specRef?.projectName ||
+        'see the uploaded specification'
     );
+  }
 
+  const reference = mergeReferences(specRef, imageRef);
+
+  if (reference) {
     referenceStore.set(reference);
   } else {
     referenceStore.clear();
+  }
+
+  // The text box is optional when a spec is attached.
+  if (!String(requirement || '').trim()) {
+    requirement = specRef?.projectName
+      ? `Build the project described in the uploaded specification: ${specRef.projectName}`
+      : 'Build the project described in the uploaded specification document.';
   }
 
   const plan = await llmProvider.planTask(
@@ -578,22 +561,14 @@ async function submitRequirement(requirement, options = {}) {
    *
    * New planner output:
    *
-   * {
-   *   id,
-   *   title,
-   *   description,
-   *   dependencies,
-   *   complexity
-   * }
+   * { id, title, description, dependencies, complexity }
    *
    * It intentionally does NOT select a concrete model.
    *
    * We normalize the logical domain here so the existing task system
    * and scheduler remain compatible.
    */
-  const plannedSubtasks = (plan.subtasks || []).map(
-    normalizeSubtaskRouting
-  );
+  const plannedSubtasks = (plan.subtasks || []).map(normalizeSubtaskRouting);
 
   const task = taskStore.createTask({
     requirement,
@@ -614,10 +589,7 @@ async function submitRequirement(requirement, options = {}) {
     try {
       databaseUrl = await ensureProjectDatabase(task.id);
     } catch (error) {
-      console.error(
-        '[orchestrator] could not create project database:',
-        error.message
-      );
+      console.error('[orchestrator] could not create project database:', error.message);
     }
   }
 
@@ -630,27 +602,17 @@ async function submitRequirement(requirement, options = {}) {
       databaseUrl,
     });
   } catch (error) {
-    console.error(
-      '[orchestrator] scaffolding failed:',
-      error.message
-    );
+    console.error('[orchestrator] scaffolding failed:', error.message);
   }
 
   try {
     installUiKit(FRONTEND_DIR);
 
-    for (const line of checkStack(
-      options.techStack,
-      BACKEND_DIR,
-      FRONTEND_DIR
-    )) {
+    for (const line of checkStack(options.techStack, BACKEND_DIR, FRONTEND_DIR)) {
       console.log(line);
     }
   } catch (error) {
-    console.error(
-      '[orchestrator] ui kit / stack check failed:',
-      error.message
-    );
+    console.error('[orchestrator] ui kit / stack check failed:', error.message);
   }
 
   console.log(
@@ -667,10 +629,7 @@ async function submitRequirement(requirement, options = {}) {
   setImmediate(() => {
     runAndStart(task.id)
       .catch((error) => {
-        console.error(
-          `[orchestrator] Task ${task.id} failed:`,
-          error
-        );
+        console.error(`[orchestrator] Task ${task.id} failed:`, error);
 
         taskStore.updateTask(task.id, {
           status: 'failed',
@@ -695,18 +654,8 @@ function listTasks() {
   return taskStore.listTasks();
 }
 
-function updateSubtaskStatus(
-  taskId,
-  subtaskId,
-  status,
-  extra = {}
-) {
-  return taskStore.updateSubtaskStatus(
-    taskId,
-    subtaskId,
-    status,
-    extra
-  );
+function updateSubtaskStatus(taskId, subtaskId, status, extra = {}) {
+  return taskStore.updateSubtaskStatus(taskId, subtaskId, status, extra);
 }
 
 function suggestTechStack(requirement) {
@@ -717,11 +666,7 @@ function getSupportedTechStacks(requirement) {
   return getStackOptions(requirement);
 }
 
-async function submitChangeRequest(
-  taskId,
-  changeRequest,
-  options = {}
-) {
+async function submitChangeRequest(taskId, changeRequest, options = {}) {
   assertNoActiveGeneration();
 
   const task = taskStore.getTask(taskId);
@@ -730,14 +675,10 @@ async function submitChangeRequest(
     throw new Error(`Task not found: ${taskId}`);
   }
 
-  const plan =
-    await llmProvider.planChangeRequest(changeRequest);
+  const plan = await llmProvider.planChangeRequest(changeRequest);
 
   for (const subtask of plan.subtasks || []) {
-    taskStore.addSubtask(
-      taskId,
-      normalizeSubtaskRouting(subtask)
-    );
+    taskStore.addSubtask(taskId, normalizeSubtaskRouting(subtask));
   }
 
   normalizeDependsOn(taskStore.getTask(taskId));
@@ -772,67 +713,36 @@ const MAX_RATE_LIMIT_WAIT_MS = 65_000;
  * The planner chooses the logical domain.
  * The registry chooses the actual model.
  *
- * This means:
- *
- * planner -> backend/frontend
- *             |
- *             v
- *      agentRegistry
- *             |
- *             +--> qwen
- *             +--> llama
- *             +--> mistral
- *             +--> gemini
- *             +--> deepseek
- *             +--> groq
- *             +--> etc.
+ * planner -> backend/frontend -> agentRegistry -> qwen / llama / mistral / ...
  */
-async function dispatchSubtaskToAgent(
-  subtask,
-  task
-) {
+async function dispatchSubtaskToAgent(subtask, task) {
   normalizeSubtaskRouting(subtask);
 
   const domain = subtask.domain;
 
-  if (
-    domain !== 'backend' &&
-    domain !== 'frontend'
-  ) {
+  if (domain !== 'backend' && domain !== 'frontend') {
     throw new Error(
       `Subtask ${subtask.id} has no valid logical domain ` +
         `(domain="${subtask.domain}", agent="${subtask.agent}").`
     );
   }
 
-  let triedAgentIds = [
-    ...(subtask.triedAgentIds || []),
-  ];
+  let triedAgentIds = [...(subtask.triedAgentIds || [])];
 
   let lastError;
   let hasResetOnce = false;
 
-  const baseComplexity =
-    estimateComplexity(subtask);
+  const baseComplexity = estimateComplexity(subtask);
 
   const complexity =
-    BACKEND_MIN_MEDIUM &&
-    domain === 'backend' &&
-    baseComplexity === 'small'
+    BACKEND_MIN_MEDIUM && domain === 'backend' && baseComplexity === 'small'
       ? 'medium'
       : baseComplexity;
 
-  for (
-    let attempt = 0;
-    attempt < MAX_AGENT_ATTEMPTS;
-    attempt++
-  ) {
+  for (let attempt = 0; attempt < MAX_AGENT_ATTEMPTS; attempt++) {
     let agentChoice;
 
-    const load = agentLoad(
-      task,
-      subtask.id
-    );
+    const load = agentLoad(task, subtask.id);
 
     try {
       agentChoice = pickAgent(domain, {
@@ -841,10 +751,7 @@ async function dispatchSubtaskToAgent(
         load,
       });
     } catch (error) {
-      if (
-        !hasResetOnce &&
-        triedAgentIds.length > 0
-      ) {
+      if (!hasResetOnce && triedAgentIds.length > 0) {
         console.warn(
           `[orchestrator] every agent for "${domain}" ` +
             `already tried on subtask ${subtask.id} ` +
@@ -870,21 +777,14 @@ async function dispatchSubtaskToAgent(
     }
 
     if (agentChoice.coolingDownMs > 0) {
-      const waitMs = Math.min(
-        agentChoice.coolingDownMs,
-        MAX_RATE_LIMIT_WAIT_MS
-      );
+      const waitMs = Math.min(agentChoice.coolingDownMs, MAX_RATE_LIMIT_WAIT_MS);
 
       console.warn(
         `[orchestrator] ${agentChoice.id} still cooling down — ` +
-          `waiting ${Math.round(
-            waitMs / 1000
-          )}s before retrying subtask ${subtask.id}`
+          `waiting ${Math.round(waitMs / 1000)}s before retrying subtask ${subtask.id}`
       );
 
-      await new Promise((resolve) =>
-        setTimeout(resolve, waitMs)
-      );
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
     }
 
     triedAgentIds.push(agentChoice.id);
@@ -894,35 +794,22 @@ async function dispatchSubtaskToAgent(
         `${subtask.id} (${complexity}) to ` +
         `${agentChoice.id} [t${agentChoice.tier}]` +
         (attempt > 0
-          ? ` (attempt ${attempt + 1}, after ` +
-            `${triedAgentIds
-              .slice(0, -1)
-              .join(', ')})`
+          ? ` (attempt ${attempt + 1}, after ${triedAgentIds.slice(0, -1).join(', ')})`
           : '')
     );
 
-    taskStore.updateSubtaskStatus(
-      task.id,
-      subtask.id,
-      'in_progress',
-      {
-        assignedAgentId: agentChoice.id,
-        assignedAgentDisplayName:
-          agentChoice.displayName,
-        triedAgentIds: [...triedAgentIds],
-        routedComplexity: complexity,
-      }
-    );
+    taskStore.updateSubtaskStatus(task.id, subtask.id, 'in_progress', {
+      assignedAgentId: agentChoice.id,
+      assignedAgentDisplayName: agentChoice.displayName,
+      triedAgentIds: [...triedAgentIds],
+      routedComplexity: complexity,
+    });
 
     const attemptStartedAt = Date.now();
 
     try {
       const result = await agentChoice.run(
-        withGuides(
-          subtask.description,
-          domain,
-          FRONTEND_DIR
-        ),
+        withGuides(subtask.description, domain, FRONTEND_DIR),
         task.apiContract,
         task.techStack
       );
@@ -937,15 +824,12 @@ async function dispatchSubtaskToAgent(
       if (wroteNothing) {
         lastError = new Error(
           `${agentChoice.id} completed without writing any files.` +
-            (result?.summary
-              ? ` Summary: ${result.summary}`
-              : '')
+            (result?.summary ? ` Summary: ${result.summary}` : '')
         );
 
         console.warn(
           `[orchestrator] ${agentChoice.id} wrote zero files ` +
-            `on subtask ${subtask.id}; trying a different agent ` +
-            `for "${domain}"`
+            `on subtask ${subtask.id}; trying a different agent for "${domain}"`
         );
 
         recordAttempt(
@@ -958,8 +842,7 @@ async function dispatchSubtaskToAgent(
           'zero_files',
           {
             ...usage,
-            reason:
-              'completed without writing any files',
+            reason: 'completed without writing any files',
           }
         );
 
@@ -976,22 +859,16 @@ async function dispatchSubtaskToAgent(
         'success',
         {
           ...usage,
-          filesWritten:
-            result.filesWritten.length,
-          linesAdded:
-            result.linesAdded || 0,
+          filesWritten: result.filesWritten.length,
+          linesAdded: result.linesAdded || 0,
         }
       );
 
-      return {
-        agentChoice,
-        result,
-      };
+      return { agentChoice, result };
     } catch (error) {
       lastError = error;
 
-      const unavailable =
-        Boolean(error?.isRateLimit);
+      const unavailable = Boolean(error?.isRateLimit);
 
       recordAttempt(
         task,
@@ -1000,9 +877,7 @@ async function dispatchSubtaskToAgent(
         agentChoice,
         attempt,
         attemptStartedAt,
-        unavailable
-          ? 'unavailable'
-          : 'error',
+        unavailable ? 'unavailable' : 'error',
         {
           ...usageOf(error),
           reason: error?.reason,
@@ -1011,14 +886,9 @@ async function dispatchSubtaskToAgent(
       );
 
       if (unavailable) {
-        const cooldown =
-          refineCooldown(error);
+        const cooldown = refineCooldown(error);
 
-        markCooldown(
-          agentChoice.id,
-          cooldown.retryAfterMs,
-          cooldown.reason
-        );
+        markCooldown(agentChoice.id, cooldown.retryAfterMs, cooldown.reason);
 
         console.warn(
           `[orchestrator] ${agentChoice.id} unavailable ` +
@@ -1045,64 +915,37 @@ async function dispatchSubtaskToAgent(
   );
 }
 
-async function runSubtask(
-  taskId,
-  subtask
-) {
+async function runSubtask(taskId, subtask) {
   const task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task not found: ${taskId}`
-    );
+    throw new Error(`Task not found: ${taskId}`);
   }
 
   try {
-    const {
-      agentChoice,
-      result,
-    } = await dispatchSubtaskToAgent(
-      subtask,
-      task
-    );
+    const { agentChoice, result } = await dispatchSubtaskToAgent(subtask, task);
 
-    const filesWritten =
-      Array.isArray(result?.filesWritten)
-        ? result.filesWritten
-        : [];
+    const filesWritten = Array.isArray(result?.filesWritten)
+      ? result.filesWritten
+      : [];
 
     if (filesWritten.length === 0) {
-      taskStore.updateSubtaskStatus(
-        taskId,
-        subtask.id,
-        'blocked',
-        {
-          lastError:
-            'Agent completed without writing any files.',
-          summary:
-            result?.summary || '',
-        }
-      );
+      taskStore.updateSubtaskStatus(taskId, subtask.id, 'blocked', {
+        lastError: 'Agent completed without writing any files.',
+        summary: result?.summary || '',
+      });
 
       return {
         success: false,
         filesWritten: [],
-        error:
-          'Agent wrote zero files.',
+        error: 'Agent wrote zero files.',
       };
     }
 
-    taskStore.addSubtaskFiles(
-      taskId,
-      subtask.id,
-      filesWritten
-    );
+    taskStore.addSubtaskFiles(taskId, subtask.id, filesWritten);
 
     if (isBackendSubtask(subtask)) {
-      const coverage =
-        checkContractCoverage(
-          task.apiContract
-        );
+      const coverage = checkContractCoverage(task.apiContract);
 
       if (!coverage.clean) {
         console.warn(
@@ -1113,53 +956,34 @@ async function runSubtask(
       }
     }
 
-    taskStore.updateSubtaskStatus(
-      taskId,
-      subtask.id,
-      'done',
-      {
-        summary:
-          result?.summary || '',
-        lastError: null,
-        assignedAgentId:
-          agentChoice.id,
-        assignedAgentDisplayName:
-          agentChoice.displayName,
-      }
-    );
+    taskStore.updateSubtaskStatus(taskId, subtask.id, 'done', {
+      summary: result?.summary || '',
+      lastError: null,
+      assignedAgentId: agentChoice.id,
+      assignedAgentDisplayName: agentChoice.displayName,
+    });
 
     contributions.recordContribution(
       taskId,
       agentChoice.id,
       agentChoice.displayName,
       {
-        filesWritten:
-          filesWritten.length,
-        linesAdded:
-          result?.linesAdded || 0,
+        filesWritten: filesWritten.length,
+        linesAdded: result?.linesAdded || 0,
       }
     );
 
     return {
       success: true,
       filesWritten,
-      summary:
-        result?.summary || '',
-      agentId:
-        agentChoice.id,
-      agentDisplayName:
-        agentChoice.displayName,
+      summary: result?.summary || '',
+      agentId: agentChoice.id,
+      agentDisplayName: agentChoice.displayName,
     };
   } catch (error) {
-    taskStore.updateSubtaskStatus(
-      taskId,
-      subtask.id,
-      'failed',
-      {
-        lastError:
-          error.message,
-      }
-    );
+    taskStore.updateSubtaskStatus(taskId, subtask.id, 'failed', {
+      lastError: error.message,
+    });
 
     throw error;
   }
@@ -1172,45 +996,28 @@ async function runSubtask(
  */
 
 async function runTask(taskId) {
-  let task =
-    taskStore.getTask(taskId);
+  let task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task ${taskId} not found`
-    );
+    throw new Error(`Task ${taskId} not found`);
   }
 
-  const completed =
-    new Set(
-      task.subtasks
-        .filter(
-          (subtask) =>
-            subtask.status === 'done'
-        )
-        .map(
-          (subtask) =>
-            subtask.id
-        )
-    );
+  const completed = new Set(
+    task.subtasks
+      .filter((subtask) => subtask.status === 'done')
+      .map((subtask) => subtask.id)
+  );
 
   let safetyCounter = 0;
 
   while (true) {
-    task =
-      taskStore.getTask(taskId);
+    task = taskStore.getTask(taskId);
 
     if (!task) {
-      throw new Error(
-        `Task ${taskId} not found`
-      );
+      throw new Error(`Task ${taskId} not found`);
     }
 
-    const pending =
-      task.subtasks.filter(
-        (subtask) =>
-          subtask.status === 'pending'
-      );
+    const pending = task.subtasks.filter((subtask) => subtask.status === 'pending');
 
     if (pending.length === 0) {
       break;
@@ -1218,176 +1025,92 @@ async function runTask(taskId) {
 
     safetyCounter++;
 
-    if (
-      safetyCounter >
-      task.subtasks.length + 10
-    ) {
-      console.error(
-        `[orchestrator] safety limit reached for task ${taskId}`
-      );
+    if (safetyCounter > task.subtasks.length + 10) {
+      console.error(`[orchestrator] safety limit reached for task ${taskId}`);
 
       for (const subtask of pending) {
-        taskStore.updateSubtaskStatus(
-          taskId,
-          subtask.id,
-          'blocked',
-          {
-            lastError:
-              'Task execution stopped because the dependency graph could not be resolved.',
-          }
-        );
+        taskStore.updateSubtaskStatus(taskId, subtask.id, 'blocked', {
+          lastError:
+            'Task execution stopped because the dependency graph could not be resolved.',
+        });
       }
 
       break;
     }
 
-    const dependencySatisfied = (
-      subtask,
-      dependency
-    ) => {
-      if (
-        completed.has(dependency)
-      ) {
+    const dependencySatisfied = (subtask, dependency) => {
+      if (completed.has(dependency)) {
         return true;
       }
 
-      if (
-        !isFrontendSubtask(subtask)
-      ) {
+      if (!isFrontendSubtask(subtask)) {
         return false;
       }
 
-      const dependencyTask =
-        task.subtasks.find(
-          (candidate) =>
-            candidate.id ===
-            dependency
-        );
+      const dependencyTask = task.subtasks.find(
+        (candidate) => candidate.id === dependency
+      );
 
       return Boolean(
         dependencyTask &&
-          isBackendSubtask(
-            dependencyTask
-          ) &&
-          [
-            'failed',
-            'blocked',
-          ].includes(
-            dependencyTask.status
-          )
+          isBackendSubtask(dependencyTask) &&
+          ['failed', 'blocked'].includes(dependencyTask.status)
       );
     };
 
-    const ready =
-      pending.filter(
-        (subtask) => {
-          const dependencies =
-            Array.isArray(
-              subtask.dependsOn
-            )
-              ? subtask.dependsOn
-              : [];
+    const ready = pending.filter((subtask) => {
+      const dependencies = Array.isArray(subtask.dependsOn) ? subtask.dependsOn : [];
 
-          return dependencies.every(
-            (dependency) =>
-              dependencySatisfied(
-                subtask,
-                dependency
-              )
-          );
-        }
+      return dependencies.every((dependency) =>
+        dependencySatisfied(subtask, dependency)
       );
+    });
 
     console.log(
       '[orchestrator] dependency check:',
-      pending.map(
-        (subtask) => ({
-          id: subtask.id,
-          domain:
-            subtask.domain ||
-            subtask.agent,
-          agent:
-            subtask.agent,
-          status:
-            subtask.status,
-          dependsOn:
-            subtask.dependsOn ||
-            [],
-          dependenciesSatisfied:
-            (
-              subtask.dependsOn ||
-              []
-            ).every(
-              (dependency) =>
-                completed.has(
-                  dependency
-                )
-            ),
-        })
-      )
+      pending.map((subtask) => ({
+        id: subtask.id,
+        domain: subtask.domain || subtask.agent,
+        agent: subtask.agent,
+        status: subtask.status,
+        dependsOn: subtask.dependsOn || [],
+        dependenciesSatisfied: (subtask.dependsOn || []).every((dependency) =>
+          completed.has(dependency)
+        ),
+      }))
     );
 
     if (ready.length === 0) {
-      console.error(
-        '[orchestrator] no runnable subtasks remain.'
+      console.error('[orchestrator] no runnable subtasks remain.');
+
+      const failedDependency = pending.some((subtask) =>
+        (subtask.dependsOn || []).some((dependency) => {
+          const dependencyTask = task.subtasks.find(
+            (candidate) => candidate.id === dependency
+          );
+
+          return (
+            dependencyTask &&
+            ['failed', 'blocked'].includes(dependencyTask.status)
+          );
+        })
       );
 
-      const failedDependency =
-        pending.some(
-          (subtask) =>
-            (
-              subtask.dependsOn ||
-              []
-            ).some(
-              (dependency) => {
-                const dependencyTask =
-                  task.subtasks.find(
-                    (candidate) =>
-                      candidate.id ===
-                      dependency
-                  );
-
-                return (
-                  dependencyTask &&
-                  [
-                    'failed',
-                    'blocked',
-                  ].includes(
-                    dependencyTask.status
-                  )
-                );
-              }
-            )
-        );
-
       for (const subtask of pending) {
-        taskStore.updateSubtaskStatus(
-          taskId,
-          subtask.id,
-          'blocked',
-          {
-            lastError:
-              failedDependency
-                ? 'A required dependency failed or was blocked.'
-                : 'No runnable dependency path exists. Check the generated task dependency graph.',
-          }
-        );
+        taskStore.updateSubtaskStatus(taskId, subtask.id, 'blocked', {
+          lastError: failedDependency
+            ? 'A required dependency failed or was blocked.'
+            : 'No runnable dependency path exists. Check the generated task dependency graph.',
+        });
       }
 
       break;
     }
 
     for (const subtask of ready) {
-      const unmet =
-        (
-          subtask.dependsOn ||
-          []
-        ).filter(
-          (dependency) =>
-            !completed.has(
-              dependency
-            )
-        );
+      const unmet = (subtask.dependsOn || []).filter(
+        (dependency) => !completed.has(dependency)
+      );
 
       if (unmet.length > 0) {
         console.warn(
@@ -1404,16 +1127,9 @@ async function runTask(taskId) {
       );
 
       try {
-        const result =
-          await runSubtask(
-            taskId,
-            subtask
-          );
+        const result = await runSubtask(taskId, subtask);
 
-        if (
-          !result ||
-          result.success !== true
-        ) {
+        if (!result || result.success !== true) {
           console.error(
             `[orchestrator] subtask ${subtask.id} ` +
               `did not complete successfully; continuing with other runnable subtasks.`
@@ -1422,30 +1138,20 @@ async function runTask(taskId) {
           continue;
         }
 
-        completed.add(
-          subtask.id
-        );
+        completed.add(subtask.id);
 
-        console.log(
-          `[orchestrator] subtask ${subtask.id} completed successfully`
-        );
+        console.log(`[orchestrator] subtask ${subtask.id} completed successfully`);
       } catch (error) {
-        console.error(
-          `[orchestrator] subtask ${subtask.id} failed:`,
-          error.message
-        );
+        console.error(`[orchestrator] subtask ${subtask.id} failed:`, error.message);
 
         continue;
       }
     }
   }
 
-  const finalTask =
-    taskStore.getTask(taskId);
+  const finalTask = taskStore.getTask(taskId);
 
-  console.log(
-    `[orchestrator] generation finished with status=${finalTask?.status}`
-  );
+  console.log(`[orchestrator] generation finished with status=${finalTask?.status}`);
 
   return finalTask;
 }
@@ -1456,57 +1162,31 @@ async function runTask(taskId) {
  * ---------------------------------------------------------
  */
 
-async function verifyAndFixFrontend(
-  taskId
-) {
-  const task =
-    taskStore.getTask(taskId);
+async function verifyAndFixFrontend(taskId) {
+  const task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task not found: ${taskId}`
-    );
+    throw new Error(`Task not found: ${taskId}`);
   }
 
-  const frontendWasRequested =
-    task.subtasks.some(
-      (subtask) =>
-        isFrontendSubtask(
-          subtask
-        )
-    );
+  const frontendWasRequested = task.subtasks.some((subtask) =>
+    isFrontendSubtask(subtask)
+  );
 
   if (!frontendWasRequested) {
-    return {
-      clean: true,
-      issues: [],
-    };
+    return { clean: true, issues: [] };
   }
 
-  for (
-    let round = 0;
-    round < MAX_FIXUP_ROUNDS;
-    round++
-  ) {
-    const report =
-      checkFrontendCompleteness(
-        FRONTEND_DIR,
-        task.techStack
-      );
+  for (let round = 0; round < MAX_FIXUP_ROUNDS; round++) {
+    const report = checkFrontendCompleteness(FRONTEND_DIR, task.techStack);
 
-    taskStore.setCompletenessReport(
-      taskId,
-      report
-    );
+    taskStore.setCompletenessReport(taskId, report);
 
     if (report.clean) {
       return report;
     }
 
-    if (
-      round ===
-      MAX_FIXUP_ROUNDS - 1
-    ) {
+    if (round === MAX_FIXUP_ROUNDS - 1) {
       return report;
     }
 
@@ -1516,10 +1196,7 @@ async function verifyAndFixFrontend(
       'Inspect the existing frontend and backend before changing anything.',
       '',
       'VALIDATION ERRORS:',
-      ...report.issues.map(
-        (issue) =>
-          `- ${issue}`
-      ),
+      ...report.issues.map((issue) => `- ${issue}`),
       '',
       'Fix the actual underlying problem.',
       'Do not merely describe the fix.',
@@ -1527,22 +1204,17 @@ async function verifyAndFixFrontend(
       'Do not rewrite unrelated components.',
     ].join('\n');
 
-    taskStore.addSubtask(
-      taskId,
-      {
-        domain: 'frontend',
-        agent: 'frontend',
-        description,
-        dependsOn: [],
-      }
-    );
+    taskStore.addSubtask(taskId, {
+      domain: 'frontend',
+      agent: 'frontend',
+      description,
+      dependsOn: [],
+    });
 
     await runTask(taskId);
   }
 
-  return taskStore.getTask(
-    taskId
-  ).completenessReport;
+  return taskStore.getTask(taskId).completenessReport;
 }
 
 /*
@@ -1591,69 +1263,38 @@ const FRONTEND_INDICATORS = [
 ];
 
 function classifyIssues(report) {
-  const issues =
-    report?.issues || [];
+  const issues = report?.issues || [];
 
   const backend = [];
   const frontend = [];
   const ambiguous = [];
 
   for (const issue of issues) {
-    const text =
-      String(issue).toLowerCase();
+    const text = String(issue).toLowerCase();
 
-    if (
-      /^browser e2e:/.test(text) &&
-      !/returned http \d{3}/.test(
-        text
-      )
-    ) {
+    if (/^browser e2e:/.test(text) && !/returned http \d{3}/.test(text)) {
       frontend.push(issue);
       continue;
     }
 
     const isIntegration =
-      text.includes(
-        'response field mismatch'
-      ) ||
-      text.includes(
-        'expected field'
-      ) ||
-      text.includes(
-        'frontend expects'
-      );
+      text.includes('response field mismatch') ||
+      text.includes('expected field') ||
+      text.includes('frontend expects');
 
     if (isIntegration) {
       frontend.push(issue);
       continue;
     }
 
-    const backendHit =
-      BACKEND_INDICATORS.some(
-        (marker) =>
-          text.includes(marker)
-      );
+    const backendHit = BACKEND_INDICATORS.some((marker) => text.includes(marker));
+    const frontendHit = FRONTEND_INDICATORS.some((marker) => text.includes(marker));
 
-    const frontendHit =
-      FRONTEND_INDICATORS.some(
-        (marker) =>
-          text.includes(marker)
-      );
-
-    if (
-      backendHit &&
-      !frontendHit
-    ) {
+    if (backendHit && !frontendHit) {
       backend.push(issue);
-    } else if (
-      frontendHit &&
-      !backendHit
-    ) {
+    } else if (frontendHit && !backendHit) {
       frontend.push(issue);
-    } else if (
-      backendHit &&
-      frontendHit
-    ) {
+    } else if (backendHit && frontendHit) {
       backend.push(issue);
       frontend.push(issue);
     } else {
@@ -1662,30 +1303,16 @@ function classifyIssues(report) {
   }
 
   if (ambiguous.length > 0) {
-    if (
-      backend.length === 0 &&
-      frontend.length === 0
-    ) {
-      backend.push(
-        ...ambiguous
-      );
-    } else if (
-      backend.length > 0
-    ) {
-      backend.push(
-        ...ambiguous
-      );
+    if (backend.length === 0 && frontend.length === 0) {
+      backend.push(...ambiguous);
+    } else if (backend.length > 0) {
+      backend.push(...ambiguous);
     } else {
-      frontend.push(
-        ...ambiguous
-      );
+      frontend.push(...ambiguous);
     }
   }
 
-  return {
-    backend,
-    frontend,
-  };
+  return { backend, frontend };
 }
 
 /*
@@ -1694,10 +1321,7 @@ function classifyIssues(report) {
  * ---------------------------------------------------------
  */
 
-function createRepairDescription(
-  issues,
-  task
-) {
+function createRepairDescription(issues, task) {
   issues = issues || [];
 
   return [
@@ -1714,24 +1338,13 @@ function createRepairDescription(
     'Do not rewrite unrelated files.',
     '',
     'VALIDATION ERRORS ASSIGNED TO YOU:',
-    ...issues.map(
-      (issue) =>
-        `- ${issue}`
-    ),
+    ...issues.map((issue) => `- ${issue}`),
     '',
     'API CONTRACT:',
-    JSON.stringify(
-      task.apiContract || [],
-      null,
-      2
-    ),
+    JSON.stringify(task.apiContract || [], null, 2),
     '',
     'SELECTED TECH STACK:',
-    JSON.stringify(
-      task.techStack || {},
-      null,
-      2
-    ),
+    JSON.stringify(task.techStack || {}, null, 2),
     '',
     'IMPORTANT:',
     'If this is an integration issue, inspect BOTH frontend and backend before fixing it.',
@@ -1760,10 +1373,7 @@ function ensureDependencies() {
       frontendDir: FRONTEND_DIR,
     });
   } catch (error) {
-    console.error(
-      '[orchestrator] dependency check failed:',
-      error.message
-    );
+    console.error('[orchestrator] dependency check failed:', error.message);
   }
 
   try {
@@ -1772,10 +1382,7 @@ function ensureDependencies() {
       frontendDir: FRONTEND_DIR,
     });
   } catch (error) {
-    console.error(
-      '[orchestrator] upload contract fix failed:',
-      error.message
-    );
+    console.error('[orchestrator] upload contract fix failed:', error.message);
   }
 }
 
@@ -1785,23 +1392,12 @@ function ensureDependencies() {
  * ---------------------------------------------------------
  */
 
-async function serveGeneratedFrontend(
-  taskId
-) {
-  const task =
-    taskStore.getTask(taskId);
+async function serveGeneratedFrontend(taskId) {
+  const task = taskStore.getTask(taskId);
 
-  const hasFrontend =
-    (
-      task?.subtasks || []
-    ).some(
-      (subtask) =>
-        isFrontendSubtask(
-          subtask
-        ) &&
-        subtask.status ===
-          'done'
-    );
+  const hasFrontend = (task?.subtasks || []).some(
+    (subtask) => isFrontendSubtask(subtask) && subtask.status === 'done'
+  );
 
   if (!hasFrontend) {
     return;
@@ -1810,29 +1406,19 @@ async function serveGeneratedFrontend(
   ensureDependencies();
 
   try {
-    const runtime =
-      await startGeneratedApp({
-        backendDir:
-          BACKEND_DIR,
-        frontendDir:
-          FRONTEND_DIR,
-        backendPort:
-          BACKEND_PORT,
-      });
+    const runtime = await startGeneratedApp({
+      backendDir: BACKEND_DIR,
+      frontendDir: FRONTEND_DIR,
+      backendPort: BACKEND_PORT,
+    });
 
-    taskStore.setRuntime(
-      taskId,
-      runtime
-    );
+    taskStore.setRuntime(taskId, runtime);
 
     console.log(
       `[orchestrator] generation was incomplete, but the generated frontend is running at http://localhost:${FRONTEND_PORT}`
     );
   } catch (error) {
-    console.error(
-      '[orchestrator] could not start the generated frontend:',
-      error.message
-    );
+    console.error('[orchestrator] could not start the generated frontend:', error.message);
   }
 }
 
@@ -1842,60 +1428,34 @@ async function serveGeneratedFrontend(
  * ---------------------------------------------------------
  */
 
-async function augmentWithSmokeTests(
-  taskId,
-  report
-) {
-  const task =
-    taskStore.getTask(taskId);
+async function augmentWithSmokeTests(taskId, report) {
+  const task = taskStore.getTask(taskId);
 
-  let issues = [
-    ...(report.issues || []),
-  ];
+  let issues = [...(report.issues || [])];
 
-  const health =
-    await checkHttp(
-      `http://127.0.0.1:${BACKEND_PORT}/api/health`
+  const health = await checkHttp(`http://127.0.0.1:${BACKEND_PORT}/api/health`);
+
+  if (health.ok && health.status === 200) {
+    issues = issues.filter(
+      (issue) =>
+        !/backend is not responding correctly[^\n]*http 404/i.test(String(issue))
     );
-
-  if (
-    health.ok &&
-    health.status === 200
-  ) {
-    issues =
-      issues.filter(
-        (issue) =>
-          !/backend is not responding correctly[^\n]*http 404/i.test(
-            String(issue)
-          )
-      );
   }
 
   let smoke;
 
   try {
-    smoke =
-      await runSmokeTests({
-        backendDir:
-          BACKEND_DIR,
-        frontendDir:
-          FRONTEND_DIR,
-        backendPort:
-          BACKEND_PORT,
-        frontendPort:
-          FRONTEND_PORT,
-        apiContract:
-          task.apiContract,
-        backendLogPath:
-          task.runtime?.backend
-            ?.logPath ||
-          null,
-      });
+    smoke = await runSmokeTests({
+      backendDir: BACKEND_DIR,
+      frontendDir: FRONTEND_DIR,
+      backendPort: BACKEND_PORT,
+      frontendPort: FRONTEND_PORT,
+      apiContract: task.apiContract,
+      backendLogPath: task.runtime?.backend?.logPath || null,
+    });
   } catch (error) {
     smoke = {
-      issues: [
-        `Smoke test harness failed: ${error.message}`,
-      ],
+      issues: [`Smoke test harness failed: ${error.message}`],
       checks: [],
     };
   }
@@ -1906,107 +1466,61 @@ async function augmentWithSmokeTests(
 
   for (const check of smoke.checks) {
     console.log(
-      `  [${check.status}] ${check.name}` +
-        `${
-          check.detail
-            ? ` — ${check.detail}`
-            : ''
-        }`
+      `  [${check.status}] ${check.name}` + `${check.detail ? ` — ${check.detail}` : ''}`
     );
   }
 
-  const stillMissing =
-    new Set(
-      checkContractCoverage(
-        task.apiContract
-      ).missing
+  const stillMissing = new Set(checkContractCoverage(task.apiContract).missing);
+
+  const passedLive = smoke.checks
+    .filter((check) => check.status === 'pass')
+    .map((check) => String(check.name));
+
+  issues = issues.filter((issue) => {
+    const match = String(issue).match(
+      /API contract endpoint is missing from backend source:\s*([A-Za-z]+)\s+(\S+)/i
     );
 
-  const passedLive =
-    smoke.checks
-      .filter(
-        (check) =>
-          check.status ===
-          'pass'
-      )
-      .map(
-        (check) =>
-          String(check.name)
-      );
+    if (!match) {
+      return true;
+    }
 
-  issues =
-    issues.filter(
-      (issue) => {
-        const match =
-          String(issue).match(
-            /API contract endpoint is missing from backend source:\s*([A-Za-z]+)\s+(\S+)/i
-          );
+    const key = `${match[1].toUpperCase()} ${match[2]}`;
 
-        if (!match) {
-          return true;
-        }
-
-        const key =
-          `${match[1].toUpperCase()} ${match[2]}`;
-
-        return (
-          stillMissing.has(
-            key
-          ) &&
-          !passedLive.some(
-            (name) =>
-              name.startsWith(
-                key
-              )
-          )
-        );
-      }
+    return (
+      stillMissing.has(key) && !passedLive.some((name) => name.startsWith(key))
     );
+  });
 
-  issues.push(
-    ...smoke.issues
-  );
+  issues.push(...smoke.issues);
 
   let e2e;
 
   try {
-    e2e =
-      await runBrowserE2E({
-        frontendPort:
-          FRONTEND_PORT,
-        backendLogPath:
-          task.runtime?.backend
-            ?.logPath ||
-          null,
-        readLogTail,
-      });
+    e2e = await runBrowserE2E({
+      frontendPort: FRONTEND_PORT,
+      backendLogPath: task.runtime?.backend?.logPath || null,
+      readLogTail,
+    });
   } catch (error) {
     e2e = {
       issues: [],
-      skipped:
-        `browser check crashed: ${error.message}`,
+      skipped: `browser check crashed: ${error.message}`,
     };
   }
 
   if (e2e.skipped) {
-    console.warn(
-      `[e2e] skipped: ${e2e.skipped}`
-    );
+    console.warn(`[e2e] skipped: ${e2e.skipped}`);
   }
 
-  console.log(
-    `[e2e] ${e2e.issues.length} issue(s)`
-  );
+  console.log(`[e2e] ${e2e.issues.length} issue(s)`);
 
-  issues.push(
-    ...e2e.issues
-  );
+  issues.push(...e2e.issues);
 
   return {
     ...report,
     issues,
-    clean:
-      issues.length === 0,
+    clean: issues.length === 0,
     smoke: smoke.checks,
   };
 }
@@ -2017,216 +1531,119 @@ async function augmentWithSmokeTests(
  * ---------------------------------------------------------
  */
 
-async function verifyAndFixProject(
-  taskId
-) {
-  let task =
-    taskStore.getTask(taskId);
+async function verifyAndFixProject(taskId) {
+  let task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task not found: ${taskId}`
-    );
+    throw new Error(`Task not found: ${taskId}`);
   }
 
   ensureDependencies();
 
   try {
-    const runtime =
-      await startGeneratedApp({
-        backendDir:
-          BACKEND_DIR,
-        frontendDir:
-          FRONTEND_DIR,
-        backendPort:
-          BACKEND_PORT,
-      });
+    const runtime = await startGeneratedApp({
+      backendDir: BACKEND_DIR,
+      frontendDir: FRONTEND_DIR,
+      backendPort: BACKEND_PORT,
+    });
 
-    taskStore.setRuntime(
-      taskId,
-      runtime
-    );
+    taskStore.setRuntime(taskId, runtime);
   } catch (error) {
-    console.error(
-      '[project-validation] initial startup failed:',
-      error.message
-    );
+    console.error('[project-validation] initial startup failed:', error.message);
   }
 
-  for (
-    let round = 0;
-    round < MAX_FIXUP_ROUNDS;
-    round++
-  ) {
-    console.log(
-      `[project-validation] round ${round + 1}/${MAX_FIXUP_ROUNDS}`
-    );
+  for (let round = 0; round < MAX_FIXUP_ROUNDS; round++) {
+    console.log(`[project-validation] round ${round + 1}/${MAX_FIXUP_ROUNDS}`);
 
-    taskStore.setValidationStatus(
-      taskId,
-      'validating'
-    );
+    taskStore.setValidationStatus(taskId, 'validating');
 
-    task =
-      taskStore.getTask(taskId);
+    task = taskStore.getTask(taskId);
 
     let report;
 
     try {
-      report =
-        await validateProject({
-          backendDir:
-            BACKEND_DIR,
-          frontendDir:
-            FRONTEND_DIR,
-          backendPort:
-            BACKEND_PORT,
-          frontendPort:
-            FRONTEND_PORT,
-          apiContract:
-            task.apiContract,
-          techStack:
-            task.techStack,
-          runBuild: true,
-        });
+      report = await validateProject({
+        backendDir: BACKEND_DIR,
+        frontendDir: FRONTEND_DIR,
+        backendPort: BACKEND_PORT,
+        frontendPort: FRONTEND_PORT,
+        apiContract: task.apiContract,
+        techStack: task.techStack,
+        runBuild: true,
+      });
     } catch (error) {
       report = {
         clean: false,
-        issues: [
-          `Validator itself failed: ${error.message}`,
-        ],
+        issues: [`Validator itself failed: ${error.message}`],
         runtime: {
           clean: false,
-          issues: [
-            error.message,
-          ],
+          issues: [error.message],
           checks: [],
         },
       };
     }
 
-    report =
-      await augmentWithSmokeTests(
-        taskId,
-        report
-      );
+    report = await augmentWithSmokeTests(taskId, report);
 
-    taskStore.setValidationReport(
-      taskId,
-      report
-    );
+    taskStore.setValidationReport(taskId, report);
 
     if (report.clean) {
-      taskStore.setValidationStatus(
-        taskId,
-        'passed'
-      );
+      taskStore.setValidationStatus(taskId, 'passed');
 
-      console.log(
-        '[project-validation] project passed all validation checks.'
-      );
+      console.log('[project-validation] project passed all validation checks.');
 
       return report;
     }
 
-    console.warn(
-      `[project-validation] found ${report.issues.length} issue(s)`
-    );
+    console.warn(`[project-validation] found ${report.issues.length} issue(s)`);
 
     for (const issue of report.issues) {
-      console.warn(
-        `  - ${issue}`
-      );
+      console.warn(`  - ${issue}`);
     }
 
-    if (
-      round ===
-      MAX_FIXUP_ROUNDS - 1
-    ) {
-      taskStore.setValidationStatus(
-        taskId,
-        'failed'
-      );
+    if (round === MAX_FIXUP_ROUNDS - 1) {
+      taskStore.setValidationStatus(taskId, 'failed');
 
-      console.warn(
-        '[project-validation] maximum repair rounds reached.'
-      );
+      console.warn('[project-validation] maximum repair rounds reached.');
 
       return report;
     }
 
-    const {
-      backend:
-        backendIssues,
-      frontend:
-        frontendIssues,
-    } =
+    const { backend: backendIssues, frontend: frontendIssues } =
       classifyIssues(report);
 
     console.log(
       `[project-validation] routing ${backendIssues.length} issue(s) to backend, ${frontendIssues.length} to frontend`
     );
 
-    taskStore.setValidationStatus(
-      taskId,
-      'repairing'
-    );
+    taskStore.setValidationStatus(taskId, 'repairing');
 
-    const repairSubtasks =
-      [];
+    const repairSubtasks = [];
 
-    if (
-      backendIssues.length > 0
-    ) {
+    if (backendIssues.length > 0) {
       repairSubtasks.push(
-        taskStore.addSubtask(
-          taskId,
-          {
-            domain:
-              'backend',
-            agent:
-              'backend',
-            description:
-              createRepairDescription(
-                backendIssues,
-                task
-              ),
-            dependsOn: [],
-          }
-        )
+        taskStore.addSubtask(taskId, {
+          domain: 'backend',
+          agent: 'backend',
+          description: createRepairDescription(backendIssues, task),
+          dependsOn: [],
+        })
       );
     }
 
-    if (
-      frontendIssues.length > 0
-    ) {
+    if (frontendIssues.length > 0) {
       repairSubtasks.push(
-        taskStore.addSubtask(
-          taskId,
-          {
-            domain:
-              'frontend',
-            agent:
-              'frontend',
-            description:
-              createRepairDescription(
-                frontendIssues,
-                task
-              ),
-            dependsOn: [],
-          }
-        )
+        taskStore.addSubtask(taskId, {
+          domain: 'frontend',
+          agent: 'frontend',
+          description: createRepairDescription(frontendIssues, task),
+          dependsOn: [],
+        })
       );
     }
 
-    if (
-      repairSubtasks.length ===
-      0
-    ) {
-      taskStore.setValidationStatus(
-        taskId,
-        'failed'
-      );
+    if (repairSubtasks.length === 0) {
+      taskStore.setValidationStatus(taskId, 'failed');
 
       return {
         clean: false,
@@ -2234,41 +1651,24 @@ async function verifyAndFixProject(
           ...report.issues,
           'Could not route any validation issue to a repair agent.',
         ],
-        runtime:
-          report.runtime,
+        runtime: report.runtime,
       };
     }
 
     await runTask(taskId);
 
-    const updatedTask =
-      taskStore.getTask(
-        taskId
-      );
+    const updatedTask = taskStore.getTask(taskId);
 
-    const repairResults =
-      repairSubtasks.map(
-        (repairSubtask) =>
-          updatedTask.subtasks.find(
-            (subtask) =>
-              subtask.id ===
-              repairSubtask.id
-          )
-      );
+    const repairResults = repairSubtasks.map((repairSubtask) =>
+      updatedTask.subtasks.find((subtask) => subtask.id === repairSubtask.id)
+    );
 
-    const anySucceeded =
-      repairResults.some(
-        (result) =>
-          result &&
-          result.status ===
-            'done'
-      );
+    const anySucceeded = repairResults.some(
+      (result) => result && result.status === 'done'
+    );
 
     if (!anySucceeded) {
-      taskStore.setValidationStatus(
-        taskId,
-        'failed'
-      );
+      taskStore.setValidationStatus(taskId, 'failed');
 
       return {
         clean: false,
@@ -2276,32 +1676,22 @@ async function verifyAndFixProject(
           ...report.issues,
           'Automatic repair agents failed to complete their repair subtasks.',
         ],
-        runtime:
-          report.runtime,
+        runtime: report.runtime,
       };
     }
 
-    console.log(
-      '[project-validation] restarting generated application after repair...'
-    );
+    console.log('[project-validation] restarting generated application after repair...');
 
     ensureDependencies();
 
     try {
-      const runtime =
-        await startGeneratedApp({
-          backendDir:
-            BACKEND_DIR,
-          frontendDir:
-            FRONTEND_DIR,
-          backendPort:
-            BACKEND_PORT,
-        });
+      const runtime = await startGeneratedApp({
+        backendDir: BACKEND_DIR,
+        frontendDir: FRONTEND_DIR,
+        backendPort: BACKEND_PORT,
+      });
 
-      taskStore.setRuntime(
-        taskId,
-        runtime
-      );
+      taskStore.setRuntime(taskId, runtime);
     } catch (error) {
       const startupReport = {
         clean: false,
@@ -2311,56 +1701,34 @@ async function verifyAndFixProject(
         ],
         runtime: {
           clean: false,
-          issues: [
-            `Application failed to restart after repair: ${error.message}`,
-          ],
+          issues: [`Application failed to restart after repair: ${error.message}`],
           checks: [],
         },
       };
 
-      const runtimeTask =
-        taskStore.getTask(
-          taskId
-        );
+      const runtimeTask = taskStore.getTask(taskId);
 
       const logPaths = [
-        runtimeTask?.runtime
-          ?.backend?.logPath,
-        runtimeTask?.runtime
-          ?.frontend?.logPath,
+        runtimeTask?.runtime?.backend?.logPath,
+        runtimeTask?.runtime?.frontend?.logPath,
       ].filter(Boolean);
 
-      const logs =
-        logPaths
-          .map(
-            (logPath) =>
-              `\n--- ${logPath} ---\n${readLogTail(
-                logPath,
-                8000
-              )}`
-          )
-          .join('\n');
+      const logs = logPaths
+        .map((logPath) => `\n--- ${logPath} ---\n${readLogTail(logPath, 8000)}`)
+        .join('\n');
 
-      startupReport.issues.push(
-        `Runtime logs:${logs}`
-      );
+      startupReport.issues.push(`Runtime logs:${logs}`);
 
-      taskStore.setValidationReport(
-        taskId,
-        startupReport
-      );
+      taskStore.setValidationReport(taskId, startupReport);
     }
   }
 
-  const finalTask =
-    taskStore.getTask(taskId);
+  const finalTask = taskStore.getTask(taskId);
 
   return (
     finalTask.validationReport || {
       clean: false,
-      issues: [
-        'Project validation did not complete.',
-      ],
+      issues: ['Project validation did not complete.'],
     }
   );
 }
@@ -2371,64 +1739,39 @@ async function verifyAndFixProject(
  * ---------------------------------------------------------
  */
 
-async function runAndStartInner(
-  taskId
-) {
-  console.log(
-    '[orchestrator] running generation subtasks...'
-  );
+async function runAndStartInner(taskId) {
+  console.log('[orchestrator] running generation subtasks...');
 
-  const task =
-    await runTask(taskId);
+  const task = await runTask(taskId);
 
-  if (
-    task.status ===
-      'blocked' ||
-    task.status ===
-      'failed'
-  ) {
+  if (task.status === 'blocked' || task.status === 'failed') {
     console.log(
       `[orchestrator] generation did not finish successfully. status=${task.status}`
     );
 
-    await serveGeneratedFrontend(
-      taskId
-    );
+    await serveGeneratedFrontend(taskId);
 
     return task;
   }
 
-  await verifyAndFixFrontend(
-    taskId
-  );
+  await verifyAndFixFrontend(taskId);
 
-  let latestTask =
-    taskStore.getTask(taskId);
+  let latestTask = taskStore.getTask(taskId);
 
-  if (
-    latestTask.status !==
-    'done'
-  ) {
+  if (latestTask.status !== 'done') {
     return latestTask;
   }
 
-  await verifyAndFixProject(
-    taskId
-  );
+  await verifyAndFixProject(taskId);
 
-  latestTask =
-    taskStore.getTask(taskId);
+  latestTask = taskStore.getTask(taskId);
 
   return latestTask;
 }
 
-async function runAndStart(
-  taskId
-) {
+async function runAndStart(taskId) {
   try {
-    return await runAndStartInner(
-      taskId
-    );
+    return await runAndStartInner(taskId);
   } finally {
     persistProject(taskId);
   }
@@ -2440,46 +1783,29 @@ async function runAndStart(
  * ---------------------------------------------------------
  */
 
-async function retryBlockedSubtasks(
-  taskId
-) {
+async function retryBlockedSubtasks(taskId) {
   assertNoActiveGeneration();
 
-  const task =
-    taskStore.getTask(taskId);
+  const task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task not found: ${taskId}`
-    );
+    throw new Error(`Task not found: ${taskId}`);
   }
 
   for (const subtask of task.subtasks) {
-    if (
-      subtask.status ===
-      'blocked'
-    ) {
-      taskStore.updateSubtaskStatus(
-        taskId,
-        subtask.id,
-        'pending',
-        {
-          lastError: null,
-        }
-      );
+    if (subtask.status === 'blocked') {
+      taskStore.updateSubtaskStatus(taskId, subtask.id, 'pending', {
+        lastError: null,
+      });
     }
   }
 
   activeTaskId = taskId;
 
   try {
-    return await runAndStart(
-      taskId
-    );
+    return await runAndStart(taskId);
   } finally {
-    releaseActiveGeneration(
-      taskId
-    );
+    releaseActiveGeneration(taskId);
   }
 }
 
@@ -2489,98 +1815,51 @@ async function retryBlockedSubtasks(
  * ---------------------------------------------------------
  */
 
-async function retrySubtask(
-  taskId,
-  subtaskId
-) {
+async function retrySubtask(taskId, subtaskId) {
   assertNoActiveGeneration();
 
-  const task =
-    taskStore.getTask(taskId);
+  const task = taskStore.getTask(taskId);
 
   if (!task) {
-    throw new Error(
-      `Task not found: ${taskId}`
-    );
+    throw new Error(`Task not found: ${taskId}`);
   }
 
-  const subtask =
-    task.subtasks.find(
-      (candidate) =>
-        candidate.id ===
-        subtaskId
-    );
+  const subtask = task.subtasks.find((candidate) => candidate.id === subtaskId);
 
   if (!subtask) {
-    throw new Error(
-      `Subtask not found: ${subtaskId}`
-    );
+    throw new Error(`Subtask not found: ${subtaskId}`);
   }
 
-  if (
-    ![
-      'failed',
-      'blocked',
-    ].includes(
-      subtask.status
-    )
-  ) {
+  if (!['failed', 'blocked'].includes(subtask.status)) {
     throw new Error(
       `Subtask ${subtaskId} is "${subtask.status}"; only failed or blocked subtasks can be retried.`
     );
   }
 
-  taskStore.updateSubtaskStatus(
-    taskId,
-    subtaskId,
-    'pending',
-    {
-      lastError: null,
-    }
-  );
+  taskStore.updateSubtaskStatus(taskId, subtaskId, 'pending', {
+    lastError: null,
+  });
 
   for (const other of task.subtasks) {
-    if (
-      other.id ===
-      subtaskId
-    ) {
+    if (other.id === subtaskId) {
       continue;
     }
 
-    const dependsOnThis =
-      (
-        other.dependsOn ||
-        []
-      ).includes(
-        subtaskId
-      );
+    const dependsOnThis = (other.dependsOn || []).includes(subtaskId);
 
-    if (
-      dependsOnThis &&
-      other.status ===
-        'blocked'
-    ) {
-      taskStore.updateSubtaskStatus(
-        taskId,
-        other.id,
-        'pending',
-        {
-          lastError: null,
-        }
-      );
+    if (dependsOnThis && other.status === 'blocked') {
+      taskStore.updateSubtaskStatus(taskId, other.id, 'pending', {
+        lastError: null,
+      });
     }
   }
 
   activeTaskId = taskId;
 
   try {
-    return await runAndStart(
-      taskId
-    );
+    return await runAndStart(taskId);
   } finally {
-    releaseActiveGeneration(
-      taskId
-    );
+    releaseActiveGeneration(taskId);
   }
 }
 
@@ -2607,8 +1886,7 @@ module.exports = {
   getSupportedTechStacks,
   suggestTechStack,
 
-  getContributionSummary:
-    contributions.getContributionSummary,
+  getContributionSummary: contributions.getContributionSummary,
 
   listRegisteredAgents,
 };

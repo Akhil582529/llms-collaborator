@@ -1,102 +1,58 @@
-# ================================
-# Node.js
-# ================================
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
 
-# ================================
-# Environment Variables / Secrets
-# ================================
+# Dependencies
+node_modules/
+
+# Environment variables and API keys
 .env
 .env.*
 !.env.example
+!.env.sample
 
-# ================================
-# Logs
-# ================================
+# Logs and activity data
 logs/
 *.log
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+activity-logs/
+*.log.*
 
-# ================================
-# Runtime / Temporary Files
-# ================================
-tmp/
-temp/
-.cache/
-*.tmp
-
-# ================================
-# Database / Local Data
-# ================================
-*.db
-*.sqlite
-*.sqlite3
-data/
-database/
-*.db-journal
-
-# ================================
-# Generated Project Data
-# ================================
-projects/
-generated/
-workspace/
-output/
-uploads/
-
-# ================================
-# Test Artifacts
-# ================================
-coverage/
-.nyc_output/
-test-results/
-
-# ================================
-# OS Files
-# ================================
-.DS_Store
-.DS_Store?
-Thumbs.db
-
-# ================================
-# IDE / Editors
-# ================================
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Keep VS Code settings if you want them
-# !.vscode/settings.json
-
-# ================================
-# Build / Distribution
-# ================================
+# Generated projects and build artifacts
 dist/
 build/
-out/
+coverage/
+.nyc_output/
 
-# ================================
-# macOS
-# ================================
-.AppleDouble
-.LSOverride
-
-# ================================
-# Windows
-# ================================
-ehthumbs.db
-Desktop.ini
-
-# ================================
-# Miscellaneous
-# ================================
+# Temporary files
+tmp/
+temp/
+*.tmp
 *.bak
-*.orig
-*.rej
+*.swp
+
+# Local databases and generated data
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+*.code-workspace
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# Deployment
+.vercel/
+.netlify/
+
+# Local-only configuration
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local

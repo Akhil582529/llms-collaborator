@@ -21,6 +21,11 @@ const {
 const { parseTextToolCalls } = require('./jsonToolCalls');
 const { validateWrite } = require('./contentGuard');
 const { getRolePrompt, formatContext } = require('./rolePrompts');
+const {
+  syntaxError,
+  repairRelativeImports,
+  repairAllImports,
+} = require('./codeChecks');
 
 const BACKEND_DIR = path.resolve(__dirname, '../../backend');
 const FRONTEND_DIR = path.resolve(__dirname, '../../frontend');
@@ -209,6 +214,25 @@ async function runGenericAgent({
   // report what they spent.
   const usage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
 
+  /**
+   * Every successful return goes through here. Before handing control
+   * back, sweep the whole project for relative imports that don't resolve
+   * (e.g. './styles.css' written from src/components/ when the file lives
+   * in src/) and fix the unambiguous ones. This also repairs files written
+   * by EARLIER subtasks, so validation repair rounds actually converge.
+   */
+  function finish(summary) {
+    try {
+      for (const fix of repairAllImports(ownDir, role)) {
+        console.log(`[${agentId}] auto-fixed import in ${fix}`);
+      }
+    } catch (err) {
+      console.warn(`[${agentId}] import sweep failed: ${err.message}`);
+    }
+
+    return { summary, filesWritten, linesAdded, agentId, usage };
+  }
+
   let emptyNudges = 0;
 
   for (let loop = 0; loop < MAX_TOOL_LOOPS; loop++) {
@@ -270,25 +294,13 @@ async function runGenericAgent({
       // Hosted models with reliable native tool calling stopping on
       // their own, having already written files, is a real finish.
       if (client.supportsNativeTools && filesWritten.length > 0) {
-        return {
-          summary: message.content || 'Work completed.',
-          filesWritten,
-          linesAdded,
-          agentId,
-          usage,
-        };
+        return finish(message.content || 'Work completed.');
       }
 
       if (++emptyNudges > MAX_EMPTY_NUDGES) {
-        return {
-          summary:
-            message.content ||
-            `${agentId} produced no usable tool calls.`,
-          filesWritten,
-          linesAdded,
-          agentId,
-          usage,
-        };
+        return finish(
+          message.content || `${agentId} produced no usable tool calls.`
+        );
       }
 
       messages.push({ role: 'assistant', content: message.content || '' });
@@ -323,13 +335,7 @@ async function runGenericAgent({
         continue;
       }
 
-      return {
-        summary: `Completed. Files: ${filesWritten.join(', ')}`,
-        filesWritten,
-        linesAdded,
-        agentId,
-        usage,
-      };
+      return finish(`Completed. Files: ${filesWritten.join(', ')}`);
     }
 
     /* ---------- Execute ---------- */
@@ -369,19 +375,38 @@ async function runGenericAgent({
           placeholderReason(call.arguments?.path, call.arguments?.content) ||
           shrinkReason(ownDir, call.arguments?.path, call.arguments?.content);
 
-        const validation = degenerate
-          ? {
-              valid: false,
-              error:
-                `Write rejected: "${call.arguments?.path}" ${degenerate}. ` +
-                'Write the COMPLETE file with every line of real code; ' +
-                'never use "..." or comments like "rest of the file".',
-            }
-          : validateWrite(
-              call.arguments?.path,
-              call.arguments?.content,
-              role
-            );
+        // Reject JS/JSX that doesn't even parse, so the model rewrites it
+        // right now instead of the build failing later.
+        const syntax = degenerate
+          ? null
+          : syntaxError(call.arguments?.path, call.arguments?.content);
+
+        let validation;
+
+        if (degenerate) {
+          validation = {
+            valid: false,
+            error:
+              `Write rejected: "${call.arguments?.path}" ${degenerate}. ` +
+              'Write the COMPLETE file with every line of real code; ' +
+              'never use "..." or comments like "rest of the file".',
+          };
+        } else if (syntax) {
+          validation = {
+            valid: false,
+            error:
+              `Write rejected: "${call.arguments?.path}" has a syntax error: ${syntax}. ` +
+              'Rewrite the COMPLETE file with valid syntax — check for ' +
+              'unbalanced braces/parentheses, unfinished statements and ' +
+              'truncated output.',
+          };
+        } else {
+          validation = validateWrite(
+            call.arguments?.path,
+            call.arguments?.content,
+            role
+          );
+        }
 
         if (!validation.valid) {
           result = { success: false, error: validation.error };
@@ -402,6 +427,16 @@ async function runGenericAgent({
               .split('\n').length;
 
             console.log(`[${agentId}] wrote: ${result.path}`);
+
+            // Fix imports in the file we just wrote (e.g. './styles.css'
+            // -> '../styles.css') while the model is still working.
+            try {
+              for (const fix of repairRelativeImports(ownDir, result.path, role)) {
+                console.log(`[${agentId}] auto-fixed import in ${result.path}: ${fix}`);
+              }
+            } catch (err) {
+              console.warn(`[${agentId}] import repair failed for ${result.path}: ${err.message}`);
+            }
           } else {
             console.warn(
               `[${agentId}] write failed: ${result?.error || 'unknown error'}`
@@ -465,13 +500,7 @@ async function runGenericAgent({
     }
   }
 
-  return {
-    summary: `Stopped after ${MAX_TOOL_LOOPS} tool-call rounds.`,
-    filesWritten,
-    linesAdded,
-    agentId,
-    usage,
-  };
+  return finish(`Stopped after ${MAX_TOOL_LOOPS} tool-call rounds.`);
 }
 
 module.exports = { runGenericAgent, placeholderReason, shrinkReason };

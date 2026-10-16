@@ -1,37 +1,21 @@
 /**
- * Groq Provider — real LLM-backed task planner.
+ * Planner provider — LLM-backed task planner.
  *
  * Responsibilities:
  * 1. planTask — decompose a NEW project requirement into subtasks + API contract.
  * 2. planChangeRequest — plan a MODIFICATION to an already-generated project.
  * 3. suggestTechStack — legacy informational helper.
+ *
+ * Provider-agnostic: uses CHAINS.planner from llmClient.js
+ * (Mistral first, Groq as fallback by default).
  */
 
-const Groq = require('groq-sdk');
-const { withGroqRetry } = require('./groqRetry');
-
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+const { chat, extractJson, CHAINS } = require('./llmClient');
 
 /*
-|--------------------------------------------------------------------------
-| NEW PROJECT PLANNER
-|--------------------------------------------------------------------------
-|
-| IMPORTANT:
-|
 | "domain" is ONLY a scheduling hint.
-|
 | Agents are still GENERAL-PURPOSE SOFTWARE ENGINEERS.
-|
-| domain:
-|   frontend -> primarily frontend work
-|   backend  -> primarily backend work
-|
-| The domain does NOT select a specific model.
-| agentRegistry.js does that later.
-|
+| The domain does NOT select a specific model — agentRegistry.js does that later.
 */
 
 const PLAN_SYSTEM_PROMPT = `
@@ -57,6 +41,28 @@ A single coding agent may modify:
 
 The "domain" field is ONLY a scheduling hint used by the orchestrator.
 It does NOT assign a specific model or restrict what the coding agent can edit.
+
+HOST-PROVIDED INFRASTRUCTURE (already done before any subtask runs):
+
+The host application has ALREADY created and configured:
+- the backend server entry point (server.js), the database connection (db.js),
+  package.json, CORS and JSON body parsing
+- the frontend app shell (package.json, public/index.html, src/index.js,
+  base styles, and an API helper at src/api.js)
+- installation of the npm packages that the code imports
+
+Therefore:
+- NEVER create subtasks for project initialization, creating the React/Express
+  app, installing packages, configuring CORS/JSON parsing, or writing a server
+  entry point.
+- Backend work is limited to SQL migrations (sql/*.sql) and API route files
+  (routes/*.js, auto-mounted at /api/<filename>).
+- Frontend work is limited to components/pages under src/, their own
+  stylesheets, and wiring them together in src/App.js.
+- Whenever the requirement involves saving or reading data, persist it in the
+  SELECTED database, never in memory.
+- Do NOT plan test-writing subtasks unless the requirement explicitly asks
+  for tests.
 
 Every subtask MUST contain:
 
@@ -157,6 +163,10 @@ SUBTASK DESIGN RULES:
 
 15. Avoid creating unnecessarily tiny subtasks.
 
+apiContract entries, if you include any, must be objects shaped
+{ "method": "GET", "path": "/api/<resource>", "description": "what it does" }
+with paths under /api/. Only list endpoints the subtasks actually implement.
+
 The final response MUST be valid JSON.
 
 Return ONLY the JSON object.
@@ -167,16 +177,16 @@ Expected shape:
   "subtasks": [
     {
       "id": "s1",
-      "title": "Initialize backend",
-      "description": "Create the Node.js/Express backend...",
+      "title": "Create expenses API",
+      "description": "Create the SQL migration and the routes/expenses.js router...",
       "domain": "backend",
       "dependencies": [],
       "complexity": "medium"
     },
     {
       "id": "s2",
-      "title": "Create frontend",
-      "description": "Create the React frontend...",
+      "title": "Create expense form component",
+      "description": "Create the React ExpenseForm component...",
       "domain": "frontend",
       "dependencies": [],
       "complexity": "medium"
@@ -185,16 +195,6 @@ Expected shape:
   "apiContract": []
 }
 `;
-
-
-/*
-|--------------------------------------------------------------------------
-| CHANGE REQUEST PLANNER
-|--------------------------------------------------------------------------
-|
-| Change requests must follow the SAME contract as new projects.
-|
-*/
 
 const CHANGE_SYSTEM_PROMPT = `
 You are a planning assistant handling a CHANGE REQUEST to an
@@ -263,14 +263,8 @@ Expected shape:
 }
 `;
 
-
 /*
-|--------------------------------------------------------------------------
-| VALIDATION
-|--------------------------------------------------------------------------
-|
-| Never allow malformed planner output into the orchestrator.
-|
+| VALIDATION — never allow malformed planner output into the orchestrator.
 */
 
 const VALID_DOMAINS = new Set(['frontend', 'backend']);
@@ -289,22 +283,16 @@ function normalizeAndValidateSubtasks(subtasks) {
     const id = String(subtask.id || `s${index + 1}`).trim();
 
     const title = String(
-      subtask.title ||
-      subtask.description ||
-      `Subtask ${index + 1}`
+      subtask.title || subtask.description || `Subtask ${index + 1}`
     ).trim();
 
     const description = String(
-      subtask.description ||
-      subtask.title ||
-      ''
+      subtask.description || subtask.title || ''
     ).trim();
 
     const domain = String(subtask.domain || '').trim().toLowerCase();
 
-    const complexity = String(
-      subtask.complexity || 'medium'
-    ).trim().toLowerCase();
+    const complexity = String(subtask.complexity || 'medium').trim().toLowerCase();
 
     const dependencies = Array.isArray(subtask.dependencies)
       ? subtask.dependencies.map(String)
@@ -326,25 +314,12 @@ function normalizeAndValidateSubtasks(subtasks) {
       );
     }
 
-    return {
-      id,
-      title,
-      description,
-      domain,
-      dependencies,
-      complexity,
-    };
+    return { id, title, description, domain, dependencies, complexity };
   });
 }
 
-
 /*
-|--------------------------------------------------------------------------
-| INTEGRATION SUBTASK
-|--------------------------------------------------------------------------
-|
-| This now uses "domain" instead of the old "agent" field.
-|
+| INTEGRATION SUBTASK — uses "domain" instead of the old "agent" field.
 */
 
 function ensureIntegrationSubtask(subtasks, techStack) {
@@ -360,9 +335,7 @@ function ensureIntegrationSubtask(subtasks, techStack) {
   const alreadyHasIntegration = subtasks.some(
     (s) =>
       s.domain === 'frontend' &&
-      /integrat|wire|app\.js|routing/i.test(
-        `${s.title} ${s.description}`
-      )
+      /integrat|wire|app\.js|routing/i.test(`${s.title} ${s.description}`)
   );
 
   if (alreadyHasIntegration) {
@@ -372,10 +345,8 @@ function ensureIntegrationSubtask(subtasks, techStack) {
   const integrationByFrontend = {
     react:
       'Wire all existing React pages/components together in App.js with react-router-dom routing',
-
     vue:
       'Wire all existing Vue pages/components together through App.vue and Vue Router',
-
     angular:
       'Wire all existing Angular components together through the root component and Angular Router',
   };
@@ -386,180 +357,131 @@ function ensureIntegrationSubtask(subtasks, techStack) {
     description:
       integrationByFrontend[techStack?.frontend] ||
       'Wire all existing frontend pages/components together using the selected framework router',
-
     domain: 'frontend',
-
-    dependencies: frontendIndices.map(
-      (i) => subtasks[i].id
-    ),
-
+    dependencies: frontendIndices.map((i) => subtasks[i].id),
     complexity: 'medium',
   });
 
   return subtasks;
 }
 
-
 /*
-|--------------------------------------------------------------------------
-| GROQ CALL
-|--------------------------------------------------------------------------
+| STACK + REFERENCE FORMATTING
 */
 
-async function callPlanner(systemPrompt, userContent) {
-  if (!process.env.GROQ_API_KEY) {
-    throw new Error(
-      'GROQ_API_KEY is not set. Add it to your .env file.'
-    );
+function formatTechStack(techStack) {
+  if (!techStack) return '';
+
+  if (typeof techStack === 'string') {
+    return `\n\nSELECTED TECH STACK: ${techStack}`;
   }
 
-  const completion = await withGroqRetry(() =>
-    groq.chat.completions.create({
-      model: 'openai/gpt-oss-120b',
+  const parts = [];
 
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: userContent,
-        },
-      ],
+  if (techStack.frontend) parts.push(`Frontend: ${techStack.frontend}`);
+  if (techStack.backend) parts.push(`Backend: ${techStack.backend}`);
+  if (techStack.database) parts.push(`Database: ${techStack.database}`);
 
-      temperature: 0.2,
+  if (parts.length === 0) return '';
 
-      response_format: {
-        type: 'json_object',
-      },
-    })
+  return (
+    '\n\nSELECTED TECH STACK (already chosen by the user — plan for exactly this):\n' +
+    parts.map((part) => `- ${part}`).join('\n')
   );
-
-  const raw = completion.choices[0]?.message?.content;
-
-  if (!raw) {
-    throw new Error('Groq returned an empty planner response.');
-  }
-
-  let parsed;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(
-      `Groq returned invalid JSON: ${raw}`
-    );
-  }
-
-  if (!Array.isArray(parsed.subtasks)) {
-    throw new Error(
-      `Groq response missing "subtasks" array: ${raw}`
-    );
-  }
-
-  /*
-   * IMPORTANT:
-   *
-   * Validate BEFORE the planner result reaches the orchestrator.
-   *
-   * This prevents corrupted tasks like:
-   *
-   * agent="undefined"
-   *
-   * from entering the task store.
-   */
-  const subtasks = normalizeAndValidateSubtasks(
-    parsed.subtasks
-  );
-
-  return {
-    subtasks,
-
-    apiContract: Array.isArray(parsed.apiContract)
-      ? parsed.apiContract
-      : [],
-  };
 }
 
+function formatReferenceBlock(referenceSpec) {
+  if (!referenceSpec) return '';
 
-/*
-|--------------------------------------------------------------------------
-| NEW PROJECT
-|--------------------------------------------------------------------------
-*/
+  return `
 
-async function planTask(
-  requirement,
-  techStack,
-  referenceSpec
-) {
-  const selectedStack = techStack || '';
-
-  const referenceBlock = referenceSpec
-    ? `
-
-REFERENCE DESIGN (extracted from a user-uploaded image — plan subtasks that reproduce it):
+REFERENCE MATERIAL (from files the user uploaded — a project specification document and/or design images):
 
 ${referenceSpec}
 
-Frontend subtask descriptions must name the specific pages/sections from the reference.
+How to use it:
+- Plan subtasks that implement EVERY in-scope feature and page it describes, using its exact names for pages, entities and fields.
+- Do NOT plan anything it marks as out of scope, optional, or future work.
+- Frontend subtask descriptions must name the specific pages/sections from the reference, and must say to use its color codes where it gives them.
+- Backend subtask descriptions must name the data entities and fields from the reference.
+- Only add apiContract endpoints for features that are in scope or visible in the reference.
+- Keep the plan compact: aim for 6-14 subtasks, each covering a coherent feature or page.
+`;
+}
 
-Only add apiContract endpoints for features visible in the reference
-or stated in the requirement.
-`
-    : '';
+/*
+| PLANNER CALL (fallback chain: Mistral -> Groq by default)
+|
+| validate() runs inside the chain, so if one model returns bad JSON or an
+| invalid plan, the next model in the chain gets a shot instead of failing
+| the whole run.
+*/
 
-  const result = await callPlanner(
-    PLAN_SYSTEM_PROMPT,
-    requirement + selectedStack + referenceBlock
-  );
+async function callPlanner(systemPrompt, userContent) {
+  const { result } = await chat({
+    chain: CHAINS.planner,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userContent },
+    ],
+    temperature: 0.2,
+    json: true,
+    maxTokens: 8000,
+    validate: (raw) => {
+      const parsed = extractJson(raw);
 
-  result.subtasks = ensureIntegrationSubtask(
-    result.subtasks,
-    techStack
-  );
+      if (!Array.isArray(parsed.subtasks)) {
+        throw new Error('Planner response missing "subtasks" array.');
+      }
+
+      return {
+        // Validate BEFORE the plan reaches the orchestrator so corrupted
+        // tasks never enter the task store.
+        subtasks: normalizeAndValidateSubtasks(parsed.subtasks),
+        apiContract: Array.isArray(parsed.apiContract) ? parsed.apiContract : [],
+      };
+    },
+  });
 
   return result;
 }
 
+/*
+| NEW PROJECT
+*/
+
+async function planTask(requirement, techStack, referenceSpec) {
+  const result = await callPlanner(
+    PLAN_SYSTEM_PROMPT,
+    String(requirement || '') +
+      formatTechStack(techStack) +
+      formatReferenceBlock(referenceSpec)
+  );
+
+  result.subtasks = ensureIntegrationSubtask(result.subtasks, techStack);
+
+  return result;
+}
 
 /*
-|--------------------------------------------------------------------------
 | CHANGE REQUEST
-|--------------------------------------------------------------------------
 */
 
 async function planChangeRequest(description) {
-  return callPlanner(
-    CHANGE_SYSTEM_PROMPT,
-    description
-  );
+  return callPlanner(CHANGE_SYSTEM_PROMPT, description);
 }
 
-
 /*
-|--------------------------------------------------------------------------
 | TECH STACK SUGGESTION
-|--------------------------------------------------------------------------
 */
 
 async function suggestTechStack(requirement) {
-  if (!process.env.GROQ_API_KEY) {
-    throw new Error(
-      'GROQ_API_KEY is not set. Add it to your .env file.'
-    );
-  }
-
-  const completion = await withGroqRetry(() =>
-    groq.chat.completions.create({
-      model: 'openai/gpt-oss-120b',
-
-      messages: [
-        {
-          role: 'system',
-
-          content: `You suggest tech stack options for a software project idea.
+  const { result } = await chat({
+    chain: CHAINS.planner,
+    messages: [
+      {
+        role: 'system',
+        content: `You suggest tech stack options for a software project idea.
 
 Respond with ONLY valid JSON, no markdown fences:
 
@@ -582,39 +504,19 @@ Note: this pipeline's agents currently build with React
 (frontend) and Node/Express (backend) regardless of what's suggested here.
 Mention this as a caveat in one option if relevant.
 `,
-        },
-
-        {
-          role: 'user',
-          content: requirement,
-        },
-      ],
-
-      temperature: 0.3,
-
-      response_format: {
-        type: 'json_object',
       },
-    })
-  );
+      { role: 'user', content: requirement },
+    ],
+    temperature: 0.3,
+    json: true,
+    validate: (raw) => {
+      const parsed = extractJson(raw);
+      return Array.isArray(parsed.options) ? parsed.options : [];
+    },
+  });
 
-  const raw = completion.choices[0]?.message?.content;
-
-  let parsed;
-
-  try {
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    throw new Error(
-      `Groq returned invalid JSON: ${raw}`
-    );
-  }
-
-  return Array.isArray(parsed.options)
-    ? parsed.options
-    : [];
+  return result;
 }
-
 
 module.exports = {
   planTask,

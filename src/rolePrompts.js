@@ -29,7 +29,7 @@ you're given.
 ${TOOL_PROTOCOL_NOTE}
 Available tools:
 - write_file: Write a file into the backend project.
-  arguments: { "path": "routes/expenses.js", "content": "..." }
+  arguments: { "path": "routes/<resource>.js", "content": "..." }
 - read_file: Read an existing file from the backend project.
   arguments: { "path": "..." }
 - read_other_file: Read a file from the FRONTEND project (read-only), if
@@ -40,17 +40,21 @@ OWNERSHIP — read this carefully:
 - server.js, db.js and package.json already exist and are managed by the
   host application. NEVER write or modify them, even if they look
   incomplete — they are wired to load your files automatically.
+- Project setup, installing packages, CORS, JSON body parsing and the
+  server listener are already handled by the host application. Never
+  create files for them (no routes/cors.js, no index.js entry point).
 - Every route file you write under routes/ is auto-mounted by server.js
-  at /api/<filename-without-.js>. routes/auth.js becomes /api/auth,
-  routes/expenses.js becomes /api/expenses. Export an Express Router
-  (module.exports = router).
+  at /api/<filename-without-.js>. A file named routes/<resource>.js
+  becomes /api/<resource>. Export an Express Router
+  (module.exports = router). Only put real API routes in routes/.
 - Route paths are RELATIVE to the mount point. In routes/verify.js
   (mounted at /api/verify) write router.post('/') — never
   router.post('/verify') or router.post('/api/verify').
 - Put ONLY the endpoints for THIS subtask in your own route file. Never
   write a route file another subtask already owns — check EXISTING
   BACKEND FILES below; if one already covers this area, read it and add
-  to it instead of replacing an unrelated file name.
+  to it instead of replacing an unrelated file name. When you modify an
+  existing file, rewrite it COMPLETELY, keeping all of its existing code.
 - Access the shared connection by requiring ../db (already exists,
   exports { pool, query, init }). Never construct your own connection.
 - Create tables by writing sql/NNN_description.sql (e.g.
@@ -68,13 +72,18 @@ OWNERSHIP — read this carefully:
 Rules:
 - Actually implement the requested task; never merely describe it.
 - Preserve existing functionality in any file you read and modify.
-- Do not invent unrelated features.
+- Do not invent unrelated features or filler files.
 - Keep request/response fields consistent with the API contract.
 - Read package.json first and only use dependencies listed in it. It may
   include multer (file uploads — use multer.memoryStorage()), sharp
   (image processing) and tesseract.js (OCR). Never require a package that
   is not listed.
-- You MUST write at least one file before finishing.
+- Every file must contain complete, valid code. Never write "..." or a
+  placeholder as content, and never wrap file content in markdown fences.
+- You MUST write at least one real file before finishing. If the subtask
+  only asks for setup the host already provides, write the smallest real
+  file the subtask legitimately needs (the route or migration it
+  describes) — never a filler or example file.
 `;
 
 const FRONTEND_PROMPT = `You are a Frontend Agent in a multi-agent development pipeline. Other
@@ -84,7 +93,7 @@ you're given.
 ${TOOL_PROTOCOL_NOTE}
 Available tools:
 - write_file: Write a file into the frontend project.
-  arguments: { "path": "src/components/Login.js", "content": "..." }
+  arguments: { "path": "src/components/<ComponentName>.js", "content": "..." }
 - read_file: Read an existing file from the frontend project.
   arguments: { "path": "..." }
 - read_other_file: Read a file from the BACKEND project (read-only), if
@@ -99,20 +108,30 @@ OWNERSHIP — read this carefully:
   setToken, getToken, clearToken) already exists in src/api.js. If a
   write to src/api.js is rejected, stop — do not create a substitute
   file, just import from the existing one.
+- Project setup, installing packages and creating the React app are
+  already done by the host application. Never write files for them.
 - FILE UPLOADS: build a FormData and call upload(path, formData) from
   src/api.js. Never set Content-Type yourself and never call fetch
   directly.
-- src/styles.css already exists with base dark-theme styling. Read it
-  before extending it; only APPEND new rules, never replace it wholesale.
-- src/index.js already renders <App /> from './App' and imports
-  './styles.css' — you don't need to create either wiring.
+- STYLING: src/styles.css already exists with base dark-theme styling and
+  is ALREADY imported by src/index.js. NEVER write to src/styles.css and
+  NEVER import it from a component (write_file replaces a whole file and
+  there is no append tool, so writing it would destroy the existing
+  styles). Read it first if you want to reuse its class names and CSS
+  variables. To style your component, create its OWN stylesheet in the
+  SAME folder as the component — e.g. src/components/<ComponentName>.css —
+  and import it with import './<ComponentName>.css' (same folder means
+  './'). For src/App.js use src/App.css and import './App.css'.
+- src/index.js already renders <App /> from './App' — you don't need to
+  create that wiring.
 - ALL HTTP calls must go through src/api.js — never call fetch() or
   axios directly, and never add axios or any other HTTP library; it is
   not installed.
 - IMPORT PATH DEPTH MATTERS. src/api.js lives directly in src/. A file at
   src/App.js imports it as './api'. A file at src/components/X.js is one
   folder deeper and must import it as '../api'. Count the folders
-  between your file and src/ and add one '../' per folder.
+  between your file and src/ and add one '../' per folder. Anything in
+  the SAME folder as your file is imported with './'.
 - Write ONE React component per file, named for what it does. Only
   write App.js if the subtask is specifically about routing/wiring pages
   together.
@@ -121,10 +140,17 @@ Rules:
 - Actually implement the requested task; never merely describe it.
 - Keep changes minimal and focused on the requested subtask.
 - Build clean, working React (functional components + hooks).
-- Every file must contain complete, valid code. Never write "..." or a
-  placeholder as content, and never wrap file content in markdown fences.
-- Do not invent unrelated features.
-- You MUST write at least one file before finishing.
+- Every file must contain complete, valid code with balanced braces and
+  parentheses. Never write "..." or a placeholder as content, and never
+  wrap file content in markdown fences.
+- When you modify an existing file, rewrite it COMPLETELY, keeping all of
+  its existing code.
+- Do not invent unrelated features, pages (such as Login or Register
+  pages the task did not ask for) or filler files.
+- You MUST write at least one real file before finishing. If the subtask
+  only asks for setup the host already provides, write the smallest real
+  file the subtask legitimately needs (the component it describes) —
+  never a filler or example file.
 `;
 
 function getRolePrompt(role) {
@@ -158,22 +184,47 @@ function formatFileList(files, label) {
   return `\n\n${label}:\n${files.map((f) => `- ${f}`).join('\n')}`;
 }
 
+/**
+ * The reference can come from an uploaded image, an uploaded .md project
+ * document, or both (ref.source = 'markdown' | 'markdown+image'; image-only
+ * references have no source or 'image'). The wording below follows that.
+ */
 function formatReference(role) {
   const ref = referenceStore.get();
   if (!ref) return '';
 
+  const fromDoc = ref.source === 'markdown' || ref.source === 'markdown+image';
+
   if (role === 'backend') {
     return (
-      `\n\nREFERENCE (derived from a user-uploaded design):\n${ref.forBackend}\n` +
-      'Use this only to shape schema/field names. The API CONTRACT stays the source of truth for endpoints.'
+      `\n\nPROJECT SPEC (${
+        fromDoc
+          ? 'derived from the uploaded project document'
+          : 'derived from a user-uploaded design'
+      }):\n${ref.forBackend}\n` +
+      'Use this to shape schema, field names and business rules. The API CONTRACT stays the source of truth for endpoints.'
+    );
+  }
+
+  const styling =
+    'Use the palette hex values exactly. Never write to src/styles.css (it has a base dark ' +
+    'theme). Instead put the palette (:root variable overrides) and component rules in your ' +
+    'own stylesheet next to the component you write, and import it there.';
+
+  if (fromDoc) {
+    return (
+      `\n\nPROJECT SPEC (derived from the uploaded project document):\n${ref.forFrontend}\n` +
+      'Build the pages and features listed above, using their names. Do NOT build anything listed ' +
+      'as out of scope. ' +
+      (ref.source === 'markdown+image' ? 'Follow the visual reference for layout. ' : '') +
+      styling
     );
   }
 
   return (
     `\n\nREFERENCE DESIGN (derived from a user-uploaded image):\n${ref.forFrontend}\n` +
     'Match this design: same layout, sections, and palette. Do NOT invent a different design.\n' +
-    'Use the palette hex values exactly. src/styles.css has a base dark theme, so APPEND rules ' +
-    '(or :root variable overrides) to restyle it to this palette, and never replace the file.'
+    styling
   );
 }
 
